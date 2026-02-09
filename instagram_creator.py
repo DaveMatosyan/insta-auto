@@ -206,8 +206,8 @@ def create_account(email_number, use_vpn_country=None):
 
         # 3. GENERATE PROFILE DATA
         password = "Pass" + generate_random_string(8) + "!"
-        fullname = "Alex " + generate_random_string(4)
-        username = "user" + generate_random_string(6)
+        fullname = "Aria Sky"
+        username = "ariasky" + generate_random_string(5)
 
         print(f"\n{'='*60}")
         print(f"Creating account #{email_number}")
