@@ -8,6 +8,16 @@ EMAIL_DOMAIN = "@gmail.com"
 START_NUMBER = 1110  # Starting number for email suffix
 NUM_ACCOUNTS = 10   # Number of accounts to create
 
+# --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
+# Choose between Gmail API (recommended - no CAPTCHA) or IMAP (requires App Password)
+USE_GMAIL_API = True  # Set to True to use Gmail API (recommended), False for IMAP
+
+# Gmail API Configuration
+GMAIL_CREDENTIALS_FILE = "gmail_credentials.json"  # Download from Google Cloud Console
+
+# Gmail IMAP Configuration (only used if USE_GMAIL_API = False)
+# Get App Password from: https://myaccount.google.com/apppasswords
+
 # --- TIMING CONFIGURATION ---
 STOP_SEC = 3  # Pause between actions
 VPN_CHANGE_INTERVAL = 3  # Change VPN every X accounts

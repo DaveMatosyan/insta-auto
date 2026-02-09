@@ -4,10 +4,18 @@ Instagram account creation logic
 
 import time
 import os
+import re
 from playwright.sync_api import sync_playwright
-from config import BASE_EMAIL_PREFIX, EMAIL_DOMAIN, STOP_SEC
+from config import BASE_EMAIL_PREFIX, EMAIL_DOMAIN, STOP_SEC, USE_GMAIL_API
 from utils import generate_random_string, print_account_info
 from account_storage import save_account
+
+# Import Gmail method based on config
+if USE_GMAIL_API:
+    from gmail_api import authenticate_gmail_api, build_gmail_service, get_verification_code_from_gmail_api
+else:
+    import imaplib
+    from config import GMAIL_EMAIL, GMAIL_PASSWORD
 
 
 def upload_profile_picture(page, image_path):
@@ -177,6 +185,110 @@ def create_post(page, post_image_path, caption=""):
         return False
 
 
+
+
+
+
+def get_verification_code_wrapper(email_to_check, max_retries=15, retry_delay=3):
+    """
+    Wrapper function to retrieve verification code using API or IMAP
+    
+    Args:
+        email_to_check (str): The email address (for reference)
+        max_retries (int): Maximum attempts to find the code
+        retry_delay (int): Seconds between retries
+        
+    Returns:
+        str: The 6-digit verification code, or None if not found
+    """
+    if USE_GMAIL_API:
+        # Use Gmail API (no CAPTCHA issues)
+        try:
+            print("🔌 Authenticating with Gmail API...")
+            creds = authenticate_gmail_api()
+            if not creds:
+                print("❌ Failed to authenticate with Gmail API")
+                return None
+            
+            service = build_gmail_service(creds)
+            return get_verification_code_from_gmail_api(service, max_retries, retry_delay)
+        except Exception as e:
+            print(f"❌ Gmail API error: {e}")
+            return None
+    else:
+        # Use IMAP (legacy)
+        return get_verification_code_from_gmail_imap(email_to_check, max_retries, retry_delay)
+
+
+def get_verification_code_from_gmail_imap(email_to_check, max_retries=12, retry_delay=5):
+    """
+    Retrieve Instagram verification code from Gmail inbox via IMAP
+    
+    Args:
+        email_to_check (str): The email address to check for the code
+        max_retries (int): Maximum attempts to find the code
+        retry_delay (int): Seconds between retries
+        
+    Returns:
+        str: The 6-digit verification code, or None if not found
+    """
+    try:
+        print(f"\n🔍 Fetching verification code from Gmail (IMAP) for {email_to_check}...")
+        print(f"Checking mailbox (max {max_retries} attempts)...\n")
+        
+        for attempt in range(max_retries):
+            try:
+                # Connect to Gmail IMAP server
+                mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+                mail.login(GMAIL_EMAIL, GMAIL_PASSWORD)
+                mail.select("INBOX")
+                
+                # Search for emails from Instagram
+                status, messages = mail.search(None, 'FROM "Instagram" OR FROM "noreply@instagram.com"')
+                
+                if messages[0]:
+                    # Get the latest email
+                    email_ids = messages[0].split()[-10:]  # Get last 10 emails
+                    
+                    for email_id in reversed(email_ids):
+                        status, msg_data = mail.fetch(email_id, "(RFC822)")
+                        
+                        if msg_data:
+                            email_body = msg_data[0][1].decode('utf-8', errors='ignore').lower()
+                            
+                            # Look for 6-digit code patterns
+                            code_match = re.search(r'\b(\d{6})\b', email_body)
+                            
+                            if code_match:
+                                verification_code = code_match.group(1)
+                                print(f"✓ Found verification code: {verification_code}")
+                                mail.close()
+                                mail.logout()
+                                return verification_code
+                
+                mail.close()
+                mail.logout()
+                
+                # Code not found yet, wait and retry
+                if attempt < max_retries - 1:
+                    print(f"⏳ Code not found yet. Attempt {attempt + 1}/{max_retries}")
+                    print(f"   Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                
+            except imaplib.IMAP4.error as e:
+                print(f"⚠️ Gmail connection error: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        
+        print(f"❌ Could not retrieve verification code after {max_retries} attempts")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Error fetching verification code: {e}")
+        return None
+
+
+
 def create_account(email_number, use_vpn_country=None):
     """Create a single Instagram account"""
     email = f"{BASE_EMAIL_PREFIX}+{email_number}{EMAIL_DOMAIN}"
@@ -250,20 +362,27 @@ def create_account(email_number, use_vpn_country=None):
             except Exception as e:
                 print(f"Error in Email step: {e}")
 
-            # 7. STEP 2: MANUAL CODE ENTRY
-            print("\n" + "="*40)
-            print(f" CHECK YOUR GMAIL ({email}) NOW!")
-            print("="*40)
+            # 7. STEP 2: AUTOMATIC CODE RETRIEVAL FROM GMAIL
+            print("\n" + "="*60)
+            print(f" RETRIEVING VERIFICATION CODE FROM GMAIL (API MODE)")
+            print(f" Email: {email}")
+            print("="*60)
             
-            # Wait for the code input field to actually appear
+            # Wait for the code input field to appear
             try:
                 page.locator('input[aria-label="Confirmation code"]').wait_for(state="visible", timeout=10000)
             except:
-                print("Warning: Code field didn't appear automatically. Check browser.")
-
-            # --- PAUSE FOR USER INPUT ---
-            verification_code = input(">>> TYPE THE 6-DIGIT CODE HERE: ")
-            # ----------------------------
+                print("Warning: Code field didn't appear automatically. Continuing...")
+            
+            # Fetch verification code automatically from Gmail using API or IMAP
+            time.sleep(40)
+            verification_code = get_verification_code_wrapper(email, max_retries=15, retry_delay=3)
+            
+            if not verification_code:
+                print("❌ Failed to retrieve verification code!")
+                print("Browser will stay open for inspection...")
+                time.sleep(30)
+                return False
 
             # 8. STEP 3: SUBMIT CODE
             if verification_code:
