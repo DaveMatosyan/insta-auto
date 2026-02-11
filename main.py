@@ -94,5 +94,4 @@ def main():
     print("="*60 + "\n")
 
 
-if __name__ == "__main__":
-    main()
+main()

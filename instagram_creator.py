@@ -333,7 +333,7 @@ def create_account(email_number, use_vpn_country=None):
 
         try:
             # 4. NAVIGATE TO SIGNUP
-            page.goto("https://www.instagram.com/accounts/emailsignup/")
+            page.goto("https://www.instagram.com/accounts/signup/email/")
             time.sleep(4)
 
             # 5. SWITCH TO EMAIL VIEW (If Phone view loads first)
@@ -375,7 +375,8 @@ def create_account(email_number, use_vpn_country=None):
                 print("Warning: Code field didn't appear automatically. Continuing...")
             
             # Fetch verification code automatically from Gmail using API or IMAP
-            time.sleep(40)
+            # Short delay to let Gmail deliver the email, then auto-retrieve
+            time.sleep(5)
             verification_code = get_verification_code_wrapper(email, max_retries=15, retry_delay=3)
             
             if not verification_code:

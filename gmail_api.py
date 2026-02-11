@@ -98,7 +98,7 @@ def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3)
                 # Search for Instagram verification emails
                 results = service.users().messages().list(
                     userId='me',
-                    q='from:(Instagram OR noreply@instagram.com) subject:(code OR verify OR confirmation)',
+                    q='from:(Instagram OR no-reply@mail.instagram.com) subject:(code OR verify OR confirmation)',
                     maxResults=5
                 ).execute()
                 
@@ -230,6 +230,8 @@ def validate_gmail_api_setup(credentials_file="gmail_credentials.json"):
         print("✓ You've granted permission to the app")
         return False
 
-
 if __name__ == "__main__":
-    validate_gmail_api_setup()
+    creds = authenticate_gmail_api()
+    # service = build_gmail_service(creds)
+
+    # get_verification_code_from_gmail_api(service)
