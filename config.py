@@ -5,8 +5,8 @@ Configuration settings for Instagram Account Generator
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "test308test11"  # Will become gagikzugaran+100@gmail.com, gagikzugaran+101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 7  # Starting number for email suffix
-NUM_ACCOUNTS = 10   # Number of accounts to create
+START_NUMBER = 13  # Starting number for email suffix
+NUM_ACCOUNTS = 4   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
 # Choose between Gmail API (recommended - no CAPTCHA) or IMAP (requires App Password)

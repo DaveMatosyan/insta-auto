@@ -308,7 +308,7 @@ def create_account(email_number, use_vpn_country=None):
     with sync_playwright() as p:
         # 1. SETUP IPHONE PROFILE WITH FINGERPRINT
         iphone = p.devices['iPhone 13']
-        browser = p.chromium.launch(headless=False, args=['--incognito'])
+        browser = p.chromium.launch(headless=False)
         
         # Build context params with fingerprint (user_agent from iphone already included in **iphone)
         context_params = {
@@ -605,11 +605,11 @@ def create_account(email_number, use_vpn_country=None):
                 if agree_button.is_visible(timeout=5000):
                     print("Clicking 'I agree' button...")
                     agree_button.click()
-                    human_delay(1, 2)
+                    human_delay(20, 25)
                 else:
                     # Alternative selector if the first one doesn't work
                     page.locator('div[role="button"]:has-text("I agree")').first.click()
-                    human_delay(1, 2)
+                    human_delay(20, 25)
                     
                 print("Terms accepted!")
                 
@@ -659,7 +659,13 @@ def create_account(email_number, use_vpn_country=None):
                     print(f"⚠️ Could not skip: {e}")
                     break
             
-            # 16. UPLOAD PROFILE PICTURE
+            # 16. NAVIGATE TO PROFILE PAGE
+            profile_url = f"https://www.instagram.com/{username}/"
+            print(f"\n🔗 Navigating to profile: {profile_url}")
+            page.goto(profile_url)
+            human_delay(3, 5)
+            
+            # 17. UPLOAD PROFILE PICTURE
             print("\n📸 Uploading profile picture...")
             human_delay(2, 3)
             try:
@@ -668,39 +674,21 @@ def create_account(email_number, use_vpn_country=None):
                 profile_pic = os.path.join(images_dir, 'profile.jpg')
                 
                 if os.path.exists(profile_pic):
-                    # Click on profile icon
-                    try:
-                        profile_btn = page.locator('svg[aria-label="Profile"]').first
-                        profile_btn.click()
-                        human_delay(2, 3)
-                    except:
-                        page.goto("https://www.instagram.com/")
-                        human_delay(2, 3)
-                        profile_btn = page.locator('svg[aria-label="Profile"]').first
-                        profile_btn.click()
-                        human_delay(2, 3)
-                    
-                    # Click edit profile
-                    try:
-                        edit_btn = page.locator('a:has-text("Edit profile")').first
-                        if edit_btn.is_visible(timeout=3000):
-                            edit_btn.click()
-                            human_delay(2, 3)
-                        else:
-                            edit_btn = page.locator('div[role="button"]:has-text("Edit profile")').first
-                            edit_btn.click()
-                            human_delay(2, 3)
-                    except Exception as e:
-                        print(f"⚠️ Could not find edit profile: {e}")
-                    
                     # Click on profile picture area to upload
                     try:
-                        pic_area = page.locator('img[alt="Profile picture for ' + username + '"]').first
+                        # Try to click on the profile picture
+                        pic_area = page.locator('button[aria-label*="profile photo"]').first
                         pic_area.click(force=True)
                         human_delay(1, 2)
                     except:
-                        # Alternative: click on any image with role button
+                        # Alternative: look for edit profile button
                         try:
+                            edit_btn = page.locator('a:has-text("Edit profile"), div[role="button"]:has-text("Edit profile")').first
+                            if edit_btn.is_visible(timeout=3000):
+                                edit_btn.click()
+                                human_delay(2, 3)
+                            
+                            # Then click profile picture area
                             pic_btn = page.locator('button:has-text("Change profile photo")').first
                             pic_btn.click()
                             human_delay(1, 2)
@@ -730,7 +718,12 @@ def create_account(email_number, use_vpn_country=None):
             except Exception as e:
                 print(f"⚠️ Error in profile picture upload: {e}")
             
-            # 17. CREATE POST
+            # 18. RETURN TO PROFILE PAGE
+            print(f"\n🔗 Returning to profile page: {profile_url}")
+            page.goto(profile_url)
+            human_delay(3, 5)
+            
+            # 19. CREATE POST
             print("\n📝 Creating first post...")
             human_delay(2, 3)
             try:
@@ -739,11 +732,7 @@ def create_account(email_number, use_vpn_country=None):
                 post_image = os.path.join(images_dir, 'post.png')
                 
                 if os.path.exists(post_image):
-                    # Navigate to home first
-                    page.goto("https://www.instagram.com/")
-                    human_delay(2, 3)
-                    
-                    # Click create button
+                    # Click create button from profile page
                     try:
                         create_btn = page.locator('svg[aria-label="Create"]').first
                         create_btn.click()
