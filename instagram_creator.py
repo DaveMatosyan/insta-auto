@@ -7,7 +7,7 @@ import os
 import re
 from playwright.sync_api import sync_playwright
 from config import BASE_EMAIL_PREFIX, EMAIL_DOMAIN, STOP_SEC, USE_GMAIL_API
-from utils import generate_random_string, print_account_info
+from utils import generate_random_string, print_account_info, generate_browser_fingerprint
 from account_storage import save_account
 
 # Import Gmail method based on config
@@ -293,15 +293,31 @@ def create_account(email_number, use_vpn_country=None):
     """Create a single Instagram account"""
     email = f"{BASE_EMAIL_PREFIX}+{email_number}{EMAIL_DOMAIN}"
     
+    # Generate random browser fingerprint
+    fingerprint = generate_browser_fingerprint()
+    
+    print(f"🎭 Generated Browser Fingerprint: {fingerprint['device_model']}")
+    
     with sync_playwright() as p:
-        # 1. SETUP IPHONE PROFILE
+        # 1. SETUP IPHONE PROFILE WITH FINGERPRINT
         iphone = p.devices['iPhone 13']
         browser = p.chromium.launch(headless=False)
-        context = browser.new_context(
+        
+        # Build context params with fingerprint (user_agent from iphone already included in **iphone)
+        context_params = {
             **iphone,
-            locale='en-US',
-            timezone_id='America/Los_Angeles'
-        )
+            'locale': 'en-US',
+            'timezone_id': fingerprint.get('timezone', 'America/Los_Angeles'),
+            'extra_http_headers': {
+                'Accept-Language': fingerprint.get('accept_language', 'en-US,en;q=0.9'),
+            }
+        }
+        
+        # Override user_agent from fingerprint if available
+        if fingerprint.get('user_agent'):
+            context_params['user_agent'] = fingerprint.get('user_agent')
+        
+        context = browser.new_context(**context_params)
 
         # 2. INJECT GPU SPOOFING
         context.add_init_script("""
@@ -527,8 +543,8 @@ def create_account(email_number, use_vpn_country=None):
             print(f"FULL NAME: {fullname}")
             print("="*60)
 
-            # Save to JSON
-            save_account(email, username, password)
+            # Save to JSON with fingerprint
+            save_account(email, username, password, fingerprint)
 
             # Wait before closing to allow user to verify
             print("\nBrowser will remain open for 20 seconds.")
