@@ -5,6 +5,7 @@ Instagram account creation logic
 import time
 import os
 import re
+import random
 from playwright.sync_api import sync_playwright
 from config import BASE_EMAIL_PREFIX, EMAIL_DOMAIN, STOP_SEC, USE_GMAIL_API
 from utils import generate_random_string, print_account_info, generate_browser_fingerprint
@@ -16,6 +17,12 @@ if USE_GMAIL_API:
 else:
     import imaplib
     from config import GMAIL_EMAIL, GMAIL_PASSWORD
+
+
+def human_delay(min_sec=1, max_sec=3):
+    """Add random human-like delays between actions"""
+    delay = random.uniform(min_sec, max_sec)
+    time.sleep(delay)
 
 
 def upload_profile_picture(page, image_path):
@@ -301,7 +308,7 @@ def create_account(email_number, use_vpn_country=None):
     with sync_playwright() as p:
         # 1. SETUP IPHONE PROFILE WITH FINGERPRINT
         iphone = p.devices['iPhone 13']
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=False, args=['--incognito'])
         
         # Build context params with fingerprint (user_agent from iphone already included in **iphone)
         context_params = {
@@ -319,9 +326,40 @@ def create_account(email_number, use_vpn_country=None):
         
         context = browser.new_context(**context_params)
 
-        # 2. INJECT GPU SPOOFING
+        # 2. INJECT COMPREHENSIVE STEALTH SCRIPTS TO HIDE PLAYWRIGHT
         context.add_init_script("""
+            // Hide webdriver detection
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            
+            // Hide plugins detection
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            
+            // Hide languages detection
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+            
+            // Chrome runtime object
+            window.chrome = {
+                runtime: {}
+            };
+            
+            // Permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Platform spoofing
             Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});
+            
+            // WebGL spoofing
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
                 if (parameter === 37445) return 'Apple Inc.';
@@ -348,9 +386,15 @@ def create_account(email_number, use_vpn_country=None):
         print(f"{'='*60}\n")
 
         try:
-            # 4. NAVIGATE TO SIGNUP
+            # 4. NAVIGATE TO PHONE SIGNUP FIRST (simulate real flow)
+            print("Step 1: Navigating to phone signup page...")
+            page.goto("https://www.instagram.com/accounts/signup/phone/")
+            human_delay(2, 4)
+            
+            # 4b. THEN NAVIGATE TO EMAIL SIGNUP
+            print("Step 2: Navigating to email signup page...")
             page.goto("https://www.instagram.com/accounts/signup/email/")
-            time.sleep(4)
+            human_delay(3, 5)
 
             # 5. SWITCH TO EMAIL VIEW (If Phone view loads first)
             try:
@@ -358,7 +402,7 @@ def create_account(email_number, use_vpn_country=None):
                 if switch_btn.is_visible():
                     print("Switching to Email view...")
                     switch_btn.click()
-                    time.sleep(2)
+                    human_delay(1, 2)
             except:
                 pass
 
@@ -366,7 +410,7 @@ def create_account(email_number, use_vpn_country=None):
             try:
                 print("Entering Email...")
                 page.locator('input[aria-label="Email"]').fill(email)
-                time.sleep(STOP_SEC)
+                human_delay(1, 2)
                 
                 print("Clicking Next...")
                 # Robust clicker
@@ -374,6 +418,7 @@ def create_account(email_number, use_vpn_country=None):
                     page.get_by_role("button", name="Next").first.click(timeout=3000)
                 except:
                     page.locator('div[role="button"]:has-text("Next")').last.click(force=True)
+                human_delay(2, 4)
                 
             except Exception as e:
                 print(f"Error in Email step: {e}")
@@ -392,7 +437,7 @@ def create_account(email_number, use_vpn_country=None):
             
             # Fetch verification code automatically from Gmail using API or IMAP
             # Short delay to let Gmail deliver the email, then auto-retrieve
-            time.sleep(5)
+            human_delay(4, 6)
             verification_code = get_verification_code_wrapper(email, max_retries=15, retry_delay=3)
             
             if not verification_code:
@@ -405,18 +450,19 @@ def create_account(email_number, use_vpn_country=None):
             if verification_code:
                 print(f"Entering code: {verification_code}")
                 page.locator('input[aria-label="Confirmation code"]').fill(verification_code)
-                time.sleep(STOP_SEC)
+                human_delay(1, 2)
                 
                 print("Clicking Next...")
                 try:
                     page.get_by_role("button", name="Next").first.click(timeout=3000)
                 except:
                     page.locator('div[role="button"]:has-text("Next")').last.click(force=True)
+                human_delay(2, 4)
             
             # 9. STEP 4: FILL PROFILE DETAILS (Name, Password)
             # This screen appears AFTER the code is verified
             print("Waiting for Profile Details screen...")
-            time.sleep(5)
+            human_delay(4, 6)
             
             try:
                 # Sometimes it asks for Name/Pass, sometimes just Password first.
@@ -426,13 +472,13 @@ def create_account(email_number, use_vpn_country=None):
                 if page.locator('input[aria-label="Full Name"]').is_visible():
                     print("Filling Full Name...")
                     page.locator('input[aria-label="Full Name"]').fill(fullname)
-                    time.sleep(STOP_SEC)
+                    human_delay(1, 2)
 
                 # Password (crucial)
                 if page.locator('input[aria-label="Password"]').is_visible():
                     print("Filling Password...")
                     page.locator('input[aria-label="Password"]').fill(password)
-                    time.sleep(STOP_SEC)
+                    human_delay(1, 2)
                 
                 # Save Login Info checkbox (sometimes blocks the button)
                 try:
@@ -446,31 +492,67 @@ def create_account(email_number, use_vpn_country=None):
                      page.locator('div[role="button"]:has-text("Next")').last.click(timeout=3000)
                 except:
                      page.locator('div[role="button"]:has-text("Sign up")').last.click(force=True)
+                human_delay(2, 4)
 
             except Exception as e:
                 print(f"Error filling profile details: {e}")
 
             # 10. STEP 5: BIRTHDAY (FIXED)
             print("Waiting for Birthday screen...")
-            time.sleep(5)
+            human_delay(4, 6)
             try:
-                # Instagram uses a date input field with type="date"
-                # Set a birthdate that makes the user 18+ (e.g., 1998-01-15)
-                print("Setting birthday...")
+                # Generate random birthday between 1997-2000
+                year = random.randint(1997, 2000)
+                month = random.randint(1, 12)
+                day = random.randint(1, 28)  # Use day 1-28 to avoid month-specific issues
+                random_birthday = f"{year:04d}-{month:02d}-{day:02d}"
                 
-                # Look for the date input field
+                print(f"Setting random birthday: {random_birthday}")
+                
+                # Try method 1: Direct date input field
                 birthday_input = page.locator('input[type="date"]').first
                 
                 if birthday_input.is_visible(timeout=5000):
-                    # Set a valid birthdate (January 15, 1998 = ~28 years old)
-                    birthday_input.fill("1998-01-15")
-                    time.sleep(2)
-                    print("Birthday set to: 1998-01-15")
+                    birthday_input.fill(random_birthday)
+                    human_delay(1, 2)
+                    print(f"Birthday set to: {random_birthday}")
+                else:
+                    print("⚠️ Date input field not visible, trying alternative method...")
+                    
+                    # Try method 2: Look for month/day/year separate fields
+                    try:
+                        # Try to find and fill individual month/day/year fields
+                        month_input = page.locator('input[placeholder*="Month"], input[aria-label*="month"]').first
+                        day_input = page.locator('input[placeholder*="Day"], input[aria-label*="day"]').first
+                        year_input = page.locator('input[placeholder*="Year"], input[aria-label*="year"]').first
+                        
+                        if month_input.is_visible():
+                            month_input.fill(str(month))
+                            human_delay(0.5, 1)
+                        if day_input.is_visible():
+                            day_input.fill(str(day))
+                            human_delay(0.5, 1)
+                        if year_input.is_visible():
+                            year_input.fill(str(year))
+                            human_delay(0.5, 1)
+                        print(f"Birthday fields filled with: {month}/{day}/{year}")
+                    except Exception as e:
+                        print(f"⚠️ Could not fill individual birthday fields: {e}")
+                        # Try method 3: JavaScript approach
+                        try:
+                            page.evaluate(f"""
+                                document.querySelector('input[type="date"]').value = '{random_birthday}';
+                                document.querySelector('input[type="date"]').dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            """)
+                            print(f"Birthday set via JavaScript: {random_birthday}")
+                        except:
+                            print("⚠️ Could not set birthday - may need manual intervention")
                 
                 # Click Next
-                time.sleep(STOP_SEC)
+                human_delay(1, 2)
                 print("Clicking Next...")
                 page.locator('div[role="button"]:has-text("Next")').last.click()
+                human_delay(2, 4)
                 
             except Exception as e:
                  print(f"Birthday step error: {e}")
@@ -478,7 +560,7 @@ def create_account(email_number, use_vpn_country=None):
 
             # 11. STEP 6: FULL NAME PAGE
             print("Waiting for Full Name screen...")
-            time.sleep(5)
+            human_delay(4, 6)
             try:
                 # Note: aria-label is "Full name" with lowercase 'n'
                 fullname_input = page.locator('input[aria-label="Full name"]')
@@ -486,34 +568,36 @@ def create_account(email_number, use_vpn_country=None):
                     print("Filling Full Name...")
                     # Click the input first to focus it
                     fullname_input.click()
-                    time.sleep(0.5)
+                    human_delay(0.5, 1)
                     # Fill the fullname
                     fullname_input.fill(fullname)
-                    time.sleep(3)
+                    human_delay(1, 2)
                     
                     print("Clicking Next...")
                     page.locator('div[role="button"]:has-text("Next")').last.click()
+                    human_delay(2, 4)
             except Exception as e:
                 print(f"Full Name step error: {e}")
 
             # 12. STEP 7: USERNAME PAGE
             print("Waiting for Username screen...")
-            time.sleep(5)
+            human_delay(4, 6)
             try:
                 username_input = page.locator('input[aria-label="Username"]')
                 if username_input.is_visible(timeout=5000):
                     print("Filling Username...")
                     username_input.fill(username)
-                    time.sleep(5)
+                    human_delay(2, 4)
                     
                     print("Clicking Next...")
                     page.locator('div[role="button"]:has-text("Next")').last.click()
+                    human_delay(2, 4)
             except Exception as e:
                 print(f"Username step error: {e}")
 
             # 13. STEP 8: AGREE TO TERMS
             print("Waiting for Terms agreement screen...")
-            time.sleep(5)
+            human_delay(4, 6)
             try:
                 # Look for "I agree" button
                 agree_button = page.locator('div[role="button"][aria-label="I agree"]').first
@@ -521,11 +605,11 @@ def create_account(email_number, use_vpn_country=None):
                 if agree_button.is_visible(timeout=5000):
                     print("Clicking 'I agree' button...")
                     agree_button.click()
-                    time.sleep(2)
+                    human_delay(1, 2)
                 else:
                     # Alternative selector if the first one doesn't work
                     page.locator('div[role="button"]:has-text("I agree")').first.click()
-                    time.sleep(2)
+                    human_delay(1, 2)
                     
                 print("Terms accepted!")
                 
@@ -546,10 +630,183 @@ def create_account(email_number, use_vpn_country=None):
             # Save to JSON with fingerprint
             save_account(email, username, password, fingerprint)
 
-            # Wait before closing to allow user to verify
-            print("\nBrowser will remain open for 20 seconds.")
-            print("You can now complete any remaining steps manually.")
-            time.sleep(200)
+            # 15. CLOSE MODAL AND SKIP 3 TIMES
+            print("\n📋 Closing modal and skipping onboarding steps...")
+            human_delay(2, 3)
+            
+            try:
+                # Try to close modal by clicking X button
+                close_btn = page.locator('div[role="button"][aria-label="Close"]').first
+                if close_btn.is_visible(timeout=3000):
+                    print("Closing modal...")
+                    close_btn.click()
+                    human_delay(1, 2)
+            except:
+                print("⚠️ No modal to close")
+            
+            # Skip 3 times
+            for skip_i in range(3):
+                try:
+                    skip_btn = page.locator('div[role="button"]:has-text("Skip")').first
+                    if skip_btn.is_visible(timeout=3000):
+                        print(f"Skipping step {skip_i + 1}/3...")
+                        skip_btn.click()
+                        human_delay(2, 3)
+                    else:
+                        print(f"Skip button not found for step {skip_i + 1}")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Could not skip: {e}")
+                    break
+            
+            # 16. UPLOAD PROFILE PICTURE
+            print("\n📸 Uploading profile picture...")
+            human_delay(2, 3)
+            try:
+                # Get profile picture path
+                images_dir = os.path.join(os.path.dirname(__file__), 'images')
+                profile_pic = os.path.join(images_dir, 'profile.jpg')
+                
+                if os.path.exists(profile_pic):
+                    # Click on profile icon
+                    try:
+                        profile_btn = page.locator('svg[aria-label="Profile"]').first
+                        profile_btn.click()
+                        human_delay(2, 3)
+                    except:
+                        page.goto("https://www.instagram.com/")
+                        human_delay(2, 3)
+                        profile_btn = page.locator('svg[aria-label="Profile"]').first
+                        profile_btn.click()
+                        human_delay(2, 3)
+                    
+                    # Click edit profile
+                    try:
+                        edit_btn = page.locator('a:has-text("Edit profile")').first
+                        if edit_btn.is_visible(timeout=3000):
+                            edit_btn.click()
+                            human_delay(2, 3)
+                        else:
+                            edit_btn = page.locator('div[role="button"]:has-text("Edit profile")').first
+                            edit_btn.click()
+                            human_delay(2, 3)
+                    except Exception as e:
+                        print(f"⚠️ Could not find edit profile: {e}")
+                    
+                    # Click on profile picture area to upload
+                    try:
+                        pic_area = page.locator('img[alt="Profile picture for ' + username + '"]').first
+                        pic_area.click(force=True)
+                        human_delay(1, 2)
+                    except:
+                        # Alternative: click on any image with role button
+                        try:
+                            pic_btn = page.locator('button:has-text("Change profile photo")').first
+                            pic_btn.click()
+                            human_delay(1, 2)
+                        except:
+                            print("⚠️ Could not find profile picture upload area")
+                    
+                    # Upload file
+                    try:
+                        file_input = page.locator('input[type="file"]').first
+                        file_input.set_input_files(profile_pic)
+                        human_delay(2, 3)
+                        
+                        # Click any confirm/save buttons
+                        try:
+                            save_btn = page.locator('button:has-text("Save")').first
+                            if save_btn.is_visible(timeout=3000):
+                                save_btn.click()
+                                human_delay(2, 3)
+                        except:
+                            pass
+                        
+                        print("✅ Profile picture uploaded successfully!")
+                    except Exception as e:
+                        print(f"⚠️ Error uploading profile picture: {e}")
+                else:
+                    print(f"⚠️ Profile picture not found at {profile_pic}")
+            except Exception as e:
+                print(f"⚠️ Error in profile picture upload: {e}")
+            
+            # 17. CREATE POST
+            print("\n📝 Creating first post...")
+            human_delay(2, 3)
+            try:
+                # Get post image path
+                images_dir = os.path.join(os.path.dirname(__file__), 'images')
+                post_image = os.path.join(images_dir, 'post.png')
+                
+                if os.path.exists(post_image):
+                    # Navigate to home first
+                    page.goto("https://www.instagram.com/")
+                    human_delay(2, 3)
+                    
+                    # Click create button
+                    try:
+                        create_btn = page.locator('svg[aria-label="Create"]').first
+                        create_btn.click()
+                        human_delay(2, 3)
+                    except:
+                        print("⚠️ Could not find create button")
+                        raise
+                    
+                    # Select from computer
+                    try:
+                        select_btn = page.locator('div[role="button"]:has-text("Select from computer")').first
+                        if select_btn.is_visible(timeout=3000):
+                            select_btn.click()
+                            human_delay(1, 2)
+                    except:
+                        pass
+                    
+                    # Upload image
+                    try:
+                        file_input = page.locator('input[type="file"]').first
+                        file_input.set_input_files(post_image)
+                        human_delay(3, 4)
+                    except Exception as e:
+                        print(f"⚠️ Error uploading post image: {e}")
+                        raise
+                    
+                    # Click Next
+                    try:
+                        next_btn = page.locator('div[role="button"]:has-text("Next")').first
+                        if next_btn.is_visible(timeout=3000):
+                            next_btn.click()
+                            human_delay(2, 3)
+                    except:
+                        pass
+                    
+                    # Click Next again (filters)
+                    try:
+                        next_btn = page.locator('div[role="button"]:has-text("Next")').first
+                        if next_btn.is_visible(timeout=3000):
+                            next_btn.click()
+                            human_delay(2, 3)
+                    except:
+                        pass
+                    
+                    # Share post
+                    try:
+                        share_btn = page.locator('div[role="button"]:has-text("Share")').first
+                        if share_btn.is_visible(timeout=3000):
+                            share_btn.click()
+                            human_delay(3, 4)
+                            print("✅ Post created successfully!")
+                        else:
+                            print("⚠️ Could not find share button")
+                    except Exception as e:
+                        print(f"⚠️ Error sharing post: {e}")
+                else:
+                    print(f"⚠️ Post image not found at {post_image}")
+            except Exception as e:
+                print(f"⚠️ Error creating post: {e}")
+            
+            # 18. CLOSE BROWSER
+            print("\n✅ All tasks completed! Closing browser...")
+            human_delay(2, 3)
 
             return True
 

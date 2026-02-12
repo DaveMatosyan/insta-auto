@@ -4,8 +4,15 @@ This ensures consistent browser identification for each account
 """
 
 import time
+import random
 from playwright.sync_api import sync_playwright
 from account_storage import get_account_by_username, get_fingerprint_by_username
+
+
+def human_delay(min_sec=1, max_sec=3):
+    """Add random human-like delays between actions"""
+    delay = random.uniform(min_sec, max_sec)
+    time.sleep(delay)
 
 
 def login_with_fingerprint(username, password, headless=False):
@@ -39,7 +46,7 @@ def login_with_fingerprint(username, password, headless=False):
         with sync_playwright() as p:
             # Setup iPhone profile with saved fingerprint
             iphone = p.devices['iPhone 13']
-            browser = p.chromium.launch(headless=headless)
+            browser = p.chromium.launch(headless=headless, args=['--incognito'])
             
             context_params = {
                 **iphone,
@@ -59,9 +66,40 @@ def login_with_fingerprint(username, password, headless=False):
             
             context = browser.new_context(**context_params)
             
-            # Inject GPU spoofing
+            # Inject comprehensive stealth scripts to hide Playwright
             context.add_init_script("""
+                // Hide webdriver detection
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false,
+                });
+                
+                // Hide plugins detection
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
+                
+                // Hide languages detection
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en'],
+                });
+                
+                // Chrome runtime object
+                window.chrome = {
+                    runtime: {}
+                };
+                
+                // Permissions query
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+                
+                // Platform spoofing
                 Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});
+                
+                // WebGL spoofing
                 const getParameter = WebGLRenderingContext.prototype.getParameter;
                 WebGLRenderingContext.prototype.getParameter = function(parameter) {
                     if (parameter === 37445) return 'Apple Inc.';
@@ -75,19 +113,19 @@ def login_with_fingerprint(username, password, headless=False):
             # Navigate to Instagram login
             print("🌐 Navigating to Instagram...")
             page.goto("https://www.instagram.com/accounts/login/")
-            time.sleep(3)
+            human_delay(2, 3)
             
             # Enter username
             print(f"📝 Entering username: {username}")
             username_input = page.locator('input[name="username"]')
             username_input.fill(username)
-            time.sleep(1.5)
+            human_delay(1, 2)
             
             # Enter password
             print("🔑 Entering password...")
             password_input = page.locator('input[name="password"]')
             password_input.fill(password)
-            time.sleep(1.5)
+            human_delay(1, 2)
             
             # Click login button
             print("➡️ Clicking login...")
@@ -96,7 +134,7 @@ def login_with_fingerprint(username, password, headless=False):
             
             # Wait for login to complete
             print("⏳ Waiting for login to complete...")
-            time.sleep(5)
+            human_delay(3, 5)
             
             # Check if login was successful
             try:
