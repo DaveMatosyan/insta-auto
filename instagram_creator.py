@@ -300,55 +300,77 @@ def create_account(email_number, use_vpn_country=None):
     """Create a single Instagram account"""
     email = f"{BASE_EMAIL_PREFIX}+{email_number}{EMAIL_DOMAIN}"
     
-    # Generate random browser fingerprint
+    # Generate completely random browser fingerprint for each account
     fingerprint = generate_browser_fingerprint()
     
     print(f"🎭 Generated Browser Fingerprint: {fingerprint['device_model']}")
+    print(f"🔐 Timezone: {fingerprint.get('timezone', 'America/Los_Angeles')}")
+    print(f"📱 User Agent: {fingerprint.get('user_agent', 'None')}")
     
     with sync_playwright() as p:
-        # 1. SETUP IPHONE PROFILE WITH FINGERPRINT
-        iphone = p.devices['iPhone 13']
-        browser = p.chromium.launch(headless=False)
+        # Generate random screen resolution
+        screen_width = random.choice([375, 390, 393, 412, 414, 430])
+        screen_height = random.choice([812, 844, 851, 915, 896, 932])
         
-        # Build context params with fingerprint (user_agent from iphone already included in **iphone)
-        context_params = {
-            **iphone,
-            'locale': 'en-US',
-            'timezone_id': fingerprint.get('timezone', 'America/Los_Angeles'),
-            'extra_http_headers': {
+        # 1. LAUNCH BROWSER WITH STEALTH MODE
+        browser = p.chromium.launch(
+            headless=False,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-default-apps',
+                '--disable-preconnect',
+            ]
+        )
+        
+        # 2. CREATE CONTEXT WITH COMPLETELY NEW FINGERPRINT
+        context = browser.new_context(
+            viewport={'width': screen_width, 'height': screen_height},
+            user_agent=fingerprint.get('user_agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15'),
+            locale='en-US',
+            timezone_id=fingerprint.get('timezone', 'America/Los_Angeles'),
+            permissions=[],  # No permissions by default
+            geolocation=None,
+            is_mobile=True,
+            has_touch=True,
+            device_scale_factor=random.choice([2, 3]),
+            extra_http_headers={
                 'Accept-Language': fingerprint.get('accept_language', 'en-US,en;q=0.9'),
             }
-        }
-        
-        # Override user_agent from fingerprint if available
-        if fingerprint.get('user_agent'):
-            context_params['user_agent'] = fingerprint.get('user_agent')
-        
-        context = browser.new_context(**context_params)
+        )
 
-        # 2. INJECT COMPREHENSIVE STEALTH SCRIPTS TO HIDE PLAYWRIGHT
+        # 3. INJECT COMPREHENSIVE STEALTH SCRIPTS TO HIDE PLAYWRIGHT
         context.add_init_script("""
-            // Hide webdriver detection
+            // Completely hide Playwright/automation
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => false,
             });
             
-            // Hide plugins detection
+            // Hide headless detection
+            Object.defineProperty(navigator, 'headless', {
+                get: () => false,
+            });
+            
+            // Chrome detection
+            window.chrome = {
+                runtime: {},
+            };
+            
+            // Spoof plugins
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1, 2, 3, 4, 5],
             });
             
-            // Hide languages detection
+            // Spoof languages
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['en-US', 'en'],
             });
             
-            // Chrome runtime object
-            window.chrome = {
-                runtime: {}
-            };
-            
-            // Permissions query
+            // Fix permissions
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
@@ -356,16 +378,28 @@ def create_account(email_number, use_vpn_country=None):
                     originalQuery(parameters)
             );
             
-            // Platform spoofing
-            Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});
-            
-            // WebGL spoofing
+            // Randomize WebGL
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
                 if (parameter === 37445) return 'Apple Inc.';
                 if (parameter === 37446) return 'Apple GPU';
                 return getParameter(parameter);
             };
+            
+            // Random canvas fingerprint
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function() {
+                return originalToDataURL.call(this);
+            };
+            
+            // Spoof media devices
+            Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', {
+                value: async () => []
+            });
+            
+            // Hide Phantom reference
+            delete window.callPhantom;
+            delete window.__phantom;
         """)
 
         page = context.new_page()
