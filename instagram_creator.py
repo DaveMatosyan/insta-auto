@@ -665,8 +665,18 @@ def create_account(email_number, use_vpn_country=None):
             save_account(email, username, password, fingerprint)
 
             # 15. CLOSE MODAL AND SKIP 3 TIMES
-            print("\n📋 Closing modal and skipping onboarding steps...")
+            print("\n📋 Handling onboarding modals...")
             human_delay(2, 3)
+            
+            # Click "Not Now" button if it appears
+            try:
+                not_now_btn = page.locator('div[role="button"]:has-text("Not Now")').first
+                if not_now_btn.is_visible(timeout=3000):
+                    print("Clicking 'Not Now' button...")
+                    not_now_btn.click()
+                    human_delay(2, 3)
+            except:
+                print("⚠️ 'Not Now' button not found")
             
             try:
                 # Try to close modal by clicking X button
