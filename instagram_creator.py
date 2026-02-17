@@ -750,7 +750,15 @@ def create_account(email_number, use_vpn_country=None):
                             human_delay(3, 4)
                             print("✅ Profile picture uploaded successfully!")
                         else:
-                            print("⚠️ Save button not found")
+                            # Try alternative selector
+                            save_btn_alt = page.locator('button').filter(has_text="Save").first
+                            if save_btn_alt.is_visible(timeout=3000):
+                                print("Clicking 'Save' button (alt selector)...")
+                                save_btn_alt.click()
+                                human_delay(3, 4)
+                                print("✅ Profile picture uploaded successfully!")
+                            else:
+                                print("⚠️ Save button not found")
                     except Exception as e:
                         print(f"⚠️ Error saving profile picture: {e}")
                 else:
@@ -758,9 +766,9 @@ def create_account(email_number, use_vpn_country=None):
             except Exception as e:
                 print(f"⚠️ Error in profile picture upload: {e}")
             
-            # 18. RETURN TO PROFILE PAGE
-            print(f"\n🔗 Returning to profile page: {profile_url}")
-            page.goto(profile_url)
+            # 18. NAVIGATE TO INSTAGRAM HOME FOR POST CREATION
+            print("\n🔗 Navigating to Instagram home to create post...")
+            page.goto("https://www.instagram.com/")
             human_delay(3, 5)
             
             # 19. CREATE POST
@@ -772,8 +780,9 @@ def create_account(email_number, use_vpn_country=None):
                 post_image = os.path.join(images_dir, 'post.png')
                 
                 if os.path.exists(post_image):
-                    # Click create button from profile page
+                    # Click + (Create) button from home page
                     try:
+                        print("Clicking + (Create) button...")
                         create_btn = page.locator('svg[aria-label="Create"]').first
                         create_btn.click()
                         human_delay(2, 3)
