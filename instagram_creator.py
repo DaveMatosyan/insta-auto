@@ -718,45 +718,41 @@ def create_account(email_number, use_vpn_country=None):
                 profile_pic = os.path.join(images_dir, 'profile.jpg')
                 
                 if os.path.exists(profile_pic):
-                    # Click on profile picture area to upload
+                    # Click the camera icon button to upload profile picture
                     try:
-                        # Try to click on the profile picture
-                        pic_area = page.locator('button[aria-label*="profile photo"]').first
-                        pic_area.click(force=True)
-                        human_delay(1, 2)
-                    except:
-                        # Alternative: look for edit profile button
-                        try:
-                            edit_btn = page.locator('a:has-text("Edit profile"), div[role="button"]:has-text("Edit profile")').first
-                            if edit_btn.is_visible(timeout=3000):
-                                edit_btn.click()
-                                human_delay(2, 3)
-                            
-                            # Then click profile picture area
-                            pic_btn = page.locator('button:has-text("Change profile photo")').first
-                            pic_btn.click()
-                            human_delay(1, 2)
-                        except:
-                            print("⚠️ Could not find profile picture upload area")
+                        # Look for the camera icon button (svg with fill="currentColor")
+                        camera_btn = page.locator('button svg[viewBox="0 0 24 24"]').first.locator('..')
+                        if camera_btn.is_visible(timeout=3000):
+                            print("Clicking camera icon...")
+                            camera_btn.click()
+                            human_delay(2, 3)
+                        else:
+                            print("⚠️ Camera icon not found")
+                    except Exception as e:
+                        print(f"⚠️ Error clicking camera icon: {e}")
                     
-                    # Upload file
+                    # Wait for file input and upload
                     try:
                         file_input = page.locator('input[type="file"]').first
+                        print("Selecting profile picture file...")
                         file_input.set_input_files(profile_pic)
                         human_delay(2, 3)
-                        
-                        # Click any confirm/save buttons
-                        try:
-                            save_btn = page.locator('button:has-text("Save")').first
-                            if save_btn.is_visible(timeout=3000):
-                                save_btn.click()
-                                human_delay(2, 3)
-                        except:
-                            pass
-                        
-                        print("✅ Profile picture uploaded successfully!")
+                        print("✓ Image selected")
                     except Exception as e:
-                        print(f"⚠️ Error uploading profile picture: {e}")
+                        print(f"⚠️ Error selecting profile picture file: {e}")
+                    
+                    # Click Save button
+                    try:
+                        save_btn = page.locator('button:has-text("Save")').first
+                        if save_btn.is_visible(timeout=5000):
+                            print("Clicking 'Save' button...")
+                            save_btn.click()
+                            human_delay(3, 4)
+                            print("✅ Profile picture uploaded successfully!")
+                        else:
+                            print("⚠️ Save button not found")
+                    except Exception as e:
+                        print(f"⚠️ Error saving profile picture: {e}")
                 else:
                     print(f"⚠️ Profile picture not found at {profile_pic}")
             except Exception as e:
@@ -781,50 +777,66 @@ def create_account(email_number, use_vpn_country=None):
                         create_btn = page.locator('svg[aria-label="Create"]').first
                         create_btn.click()
                         human_delay(2, 3)
-                    except:
-                        print("⚠️ Could not find create button")
+                        print("✓ Create button clicked")
+                    except Exception as e:
+                        print(f"⚠️ Could not find create button: {e}")
                         raise
                     
                     # Select from computer
                     try:
                         select_btn = page.locator('div[role="button"]:has-text("Select from computer")').first
                         if select_btn.is_visible(timeout=3000):
+                            print("Clicking 'Select from computer'...")
                             select_btn.click()
                             human_delay(1, 2)
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ Could not find select button: {e}")
                     
                     # Upload image
                     try:
+                        print("Uploading image...")
                         file_input = page.locator('input[type="file"]').first
                         file_input.set_input_files(post_image)
                         human_delay(3, 4)
+                        print("✓ Image uploaded")
                     except Exception as e:
                         print(f"⚠️ Error uploading post image: {e}")
                         raise
                     
-                    # Click Next
+                    # Click Next (first one - after image selection)
                     try:
-                        next_btn = page.locator('div[role="button"]:has-text("Next")').first
+                        print("Waiting for Next button...")
+                        page.wait_for_selector('div[role="button"]:has-text("Next")', timeout=5000)
+                        next_btn = page.locator('div[role="button"]:has-text("Next")').last
                         if next_btn.is_visible(timeout=3000):
+                            print("Clicking Next (1/2)...")
                             next_btn.click()
                             human_delay(2, 3)
-                    except:
-                        pass
+                        else:
+                            print("⚠️ Next button not visible")
+                    except Exception as e:
+                        print(f"⚠️ Error clicking first Next: {e}")
                     
-                    # Click Next again (filters)
+                    # Click Next again (filters screen)
                     try:
-                        next_btn = page.locator('div[role="button"]:has-text("Next")').first
+                        print("Waiting for Next button (filters)...")
+                        page.wait_for_selector('div[role="button"]:has-text("Next")', timeout=5000)
+                        next_btn = page.locator('div[role="button"]:has-text("Next")').last
                         if next_btn.is_visible(timeout=3000):
+                            print("Clicking Next (2/2)...")
                             next_btn.click()
                             human_delay(2, 3)
-                    except:
-                        pass
+                        else:
+                            print("⚠️ Next button not visible")
+                    except Exception as e:
+                        print(f"⚠️ Error clicking second Next: {e}")
                     
                     # Share post
                     try:
+                        print("Waiting for Share button...")
                         share_btn = page.locator('div[role="button"]:has-text("Share")').first
                         if share_btn.is_visible(timeout=3000):
+                            print("Clicking 'Share'...")
                             share_btn.click()
                             human_delay(3, 4)
                             print("✅ Post created successfully!")
