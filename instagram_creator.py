@@ -25,177 +25,6 @@ def human_delay(min_sec=1, max_sec=3):
     time.sleep(delay)
 
 
-def upload_profile_picture(page, image_path):
-    """
-    Upload a profile picture to Instagram account
-    
-    Args:
-        page: Playwright page object
-        image_path (str): Path to the image file
-        
-    Returns:
-        bool: True if upload successful, False otherwise
-    """
-    try:
-        if not os.path.exists(image_path):
-            print(f"⚠️ Profile picture not found at: {image_path}")
-            return False
-        
-        print("\n📸 Uploading profile picture...")
-        
-        # Navigate to profile
-        page.goto("https://www.instagram.com/")
-        time.sleep(3)
-        
-        # Click on profile icon (usually in bottom right or top left)
-        try:
-            profile_btn = page.locator('svg[aria-label="Profile"]').first
-            profile_btn.click()
-            time.sleep(2)
-        except:
-            # Alternative: navigate directly to profile
-            page.goto("https://www.instagram.com/")
-            time.sleep(2)
-        
-        # Click edit profile button
-        try:
-            edit_profile_btn = page.locator('div[role="button"]:has-text("Edit profile")').first
-            if edit_profile_btn.is_visible(timeout=5000):
-                edit_profile_btn.click()
-                time.sleep(2)
-        except Exception as e:
-            print(f"⚠️ Could not find edit profile button: {e}")
-            return False
-        
-        # Click on profile picture to upload
-        try:
-            # Look for the profile picture area
-            pic_upload = page.locator('div[role="button"]').filter(has_text="Change profile photo").first
-            if pic_upload.is_visible(timeout=3000):
-                pic_upload.click()
-                time.sleep(1)
-        except:
-            pass
-        
-        # Handle file input
-        try:
-            file_input = page.locator('input[type="file"]')
-            file_input.set_input_files(image_path)
-            time.sleep(2)
-            print("✓ Profile picture uploaded successfully!")
-            return True
-        except Exception as e:
-            print(f"⚠️ Error uploading profile picture: {e}")
-            return False
-            
-    except Exception as e:
-        print(f"⚠️ Error in profile picture upload: {e}")
-        return False
-
-
-def create_post(page, post_image_path, caption=""):
-    """
-    Create a new post on Instagram
-    
-    Args:
-        page: Playwright page object
-        post_image_path (str): Path to the image for the post
-        caption (str): Caption for the post
-        
-    Returns:
-        bool: True if post created successfully, False otherwise
-    """
-    try:
-        if not os.path.exists(post_image_path):
-            print(f"⚠️ Post image not found at: {post_image_path}")
-            return False
-        
-        print("\n📝 Creating new post...")
-        
-        # Navigate to Instagram home
-        page.goto("https://www.instagram.com/")
-        time.sleep(3)
-        
-        # Click on create/new post button (usually a + icon)
-        try:
-            create_btn = page.locator('svg[aria-label="Create"]').first
-            create_btn.click()
-            time.sleep(2)
-        except:
-            print("⚠️ Could not find create button")
-            return False
-        
-        # Click on "Select from computer"
-        try:
-            select_btn = page.locator('div[role="button"]:has-text("Select from computer")').first
-            if select_btn.is_visible(timeout=5000):
-                select_btn.click()
-                time.sleep(1)
-        except:
-            pass
-        
-        # Upload image
-        try:
-            file_input = page.locator('input[type="file"]')
-            file_input.set_input_files(post_image_path)
-            time.sleep(3)
-            print("✓ Image selected for post")
-        except Exception as e:
-            print(f"⚠️ Error selecting post image: {e}")
-            return False
-        
-        # Click Next button
-        try:
-            next_btn = page.locator('div[role="button"]:has-text("Next")').first
-            if next_btn.is_visible(timeout=5000):
-                next_btn.click()
-                time.sleep(2)
-        except:
-            pass
-        
-        # Click Next again (for filters/editing)
-        try:
-            next_btn = page.locator('div[role="button"]:has-text("Next")').first
-            if next_btn.is_visible(timeout=5000):
-                next_btn.click()
-                time.sleep(2)
-        except:
-            pass
-        
-        # Add caption if provided
-        if caption:
-            try:
-                caption_field = page.locator('textarea[aria-label="Write a caption..."]').first
-                if caption_field.is_visible(timeout=3000):
-                    caption_field.click()
-                    time.sleep(1)
-                    caption_field.fill(caption)
-                    time.sleep(1)
-                    print(f"✓ Caption added: {caption}")
-            except Exception as e:
-                print(f"⚠️ Error adding caption: {e}")
-        
-        # Click Share button
-        try:
-            share_btn = page.locator('div[role="button"]:has-text("Share")').first
-            if share_btn.is_visible(timeout=5000):
-                share_btn.click()
-                time.sleep(3)
-                print("✓ Post created successfully!")
-                return True
-        except Exception as e:
-            print(f"⚠️ Error sharing post: {e}")
-            return False
-            
-    except Exception as e:
-        print(f"⚠️ Error creating post: {e}")
-        return False
-
-
-
-
-
-
 def get_verification_code_wrapper(email_to_check, max_retries=15, retry_delay=3):
     """
     Wrapper function to retrieve verification code using API or IMAP
@@ -663,6 +492,26 @@ def create_account(email_number, use_vpn_country=None):
 
             # Save to JSON with fingerprint
             save_account(email, username, password, fingerprint)
+            
+            # Increment START_NUMBER in config.py for next account
+            try:
+                config_path = os.path.join(os.path.dirname(__file__), 'config.py')
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_content = f.read()
+                
+                # Find and increment START_NUMBER
+                import re
+                match = re.search(r'START_NUMBER = (\d+)', config_content)
+                if match:
+                    current_num = int(match.group(1))
+                    new_num = current_num + 1
+                    updated_content = re.sub(r'START_NUMBER = \d+', f'START_NUMBER = {new_num}', config_content)
+                    
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        f.write(updated_content)
+                    print(f"✓ Updated START_NUMBER from {current_num} to {new_num}")
+            except Exception as e:
+                print(f"⚠️ Could not update START_NUMBER: {e}")
 
             # 15. CLOSE MODAL AND SKIP 3 TIMES
             print("\n📋 Handling onboarding modals...")
@@ -708,64 +557,27 @@ def create_account(email_number, use_vpn_country=None):
             print(f"\n🔗 Navigating to profile: {profile_url}")
             page.goto(profile_url)
             human_delay(3, 5)
-            
             # 17. UPLOAD PROFILE PICTURE
             print("\n📸 Uploading profile picture...")
             human_delay(2, 3)
             try:
-                # Get profile picture path
                 images_dir = os.path.join(os.path.dirname(__file__), 'images')
                 profile_pic = os.path.join(images_dir, 'profile.jpg')
-                
+
                 if os.path.exists(profile_pic):
-                    # Click the camera icon button to upload profile picture
-                    try:
-                        # Look for the camera icon button (svg with fill="currentColor")
-                        camera_btn = page.locator('button svg[viewBox="0 0 24 24"]').first.locator('..')
-                        if camera_btn.is_visible(timeout=3000):
-                            print("Clicking camera icon...")
-                            camera_btn.click()
-                            human_delay(2, 3)
-                        else:
-                            print("⚠️ Camera icon not found")
-                    except Exception as e:
-                        print(f"⚠️ Error clicking camera icon: {e}")
-                    
-                    # Wait for file input and upload
-                    try:
-                        file_input = page.locator('input[type="file"]').first
-                        print("Selecting profile picture file...")
-                        file_input.set_input_files(profile_pic)
-                        human_delay(2, 3)
-                        print("✓ Image selected")
-                    except Exception as e:
-                        print(f"⚠️ Error selecting profile picture file: {e}")
-                    
-                    # Click Save button
-                    try:
-                        save_btn = page.locator('button:has-text("Save")').first
-                        if save_btn.is_visible(timeout=5000):
-                            print("Clicking 'Save' button...")
-                            save_btn.click()
-                            human_delay(3, 4)
-                            print("✅ Profile picture uploaded successfully!")
-                        else:
-                            # Try alternative selector
-                            save_btn_alt = page.locator('button').filter(has_text="Save").first
-                            if save_btn_alt.is_visible(timeout=3000):
-                                print("Clicking 'Save' button (alt selector)...")
-                                save_btn_alt.click()
-                                human_delay(3, 4)
-                                print("✅ Profile picture uploaded successfully!")
-                            else:
-                                print("⚠️ Save button not found")
-                    except Exception as e:
-                        print(f"⚠️ Error saving profile picture: {e}")
+                    print("Setting profile picture...")
+                    page.locator('input[type="file"]').nth(1).set_input_files(profile_pic)
+                    human_delay(3, 5)  # Wait for crop screen to appear
+
+                    print("Clicking Save...")
+                    page.evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Save')?.click()")
+                    human_delay(3, 4)
+                    print("✅ Profile picture uploaded successfully!")
                 else:
                     print(f"⚠️ Profile picture not found at {profile_pic}")
+
             except Exception as e:
-                print(f"⚠️ Error in profile picture upload: {e}")
-            
+                print(f"⚠️ Error uploading profile picture: {e}")
             # 18. NAVIGATE TO INSTAGRAM HOME FOR POST CREATION
             print("\n🔗 Navigating to Instagram home to create post...")
             page.goto("https://www.instagram.com/")
@@ -775,90 +587,46 @@ def create_account(email_number, use_vpn_country=None):
             print("\n📝 Creating first post...")
             human_delay(2, 3)
             try:
-                # Get post image path
                 images_dir = os.path.join(os.path.dirname(__file__), 'images')
                 post_image = os.path.join(images_dir, 'post.png')
-                
+
                 if os.path.exists(post_image):
-                    # Click + (Create) button from home page
-                    try:
-                        print("Clicking + (Create) button...")
-                        create_btn = page.locator('svg[aria-label="Create"]').first
-                        create_btn.click()
-                        human_delay(2, 3)
-                        print("✓ Create button clicked")
-                    except Exception as e:
-                        print(f"⚠️ Could not find create button: {e}")
-                        raise
-                    
-                    # Select from computer
-                    try:
-                        select_btn = page.locator('div[role="button"]:has-text("Select from computer")').first
-                        if select_btn.is_visible(timeout=3000):
-                            print("Clicking 'Select from computer'...")
-                            select_btn.click()
-                            human_delay(1, 2)
-                    except Exception as e:
-                        print(f"⚠️ Could not find select button: {e}")
-                    
-                    # Upload image
-                    try:
-                        print("Uploading image...")
-                        file_input = page.locator('input[type="file"]').first
-                        file_input.set_input_files(post_image)
-                        human_delay(3, 4)
-                        print("✓ Image uploaded")
-                    except Exception as e:
-                        print(f"⚠️ Error uploading post image: {e}")
-                        raise
-                    
-                    # Click Next (first one - after image selection)
-                    try:
-                        print("Waiting for Next button...")
-                        page.wait_for_selector('div[role="button"]:has-text("Next")', timeout=5000)
-                        next_btn = page.locator('div[role="button"]:has-text("Next")').last
-                        if next_btn.is_visible(timeout=3000):
-                            print("Clicking Next (1/2)...")
-                            next_btn.click()
-                            human_delay(2, 3)
-                        else:
-                            print("⚠️ Next button not visible")
-                    except Exception as e:
-                        print(f"⚠️ Error clicking first Next: {e}")
-                    
-                    # Click Next again (filters screen)
-                    try:
-                        print("Waiting for Next button (filters)...")
-                        page.wait_for_selector('div[role="button"]:has-text("Next")', timeout=5000)
-                        next_btn = page.locator('div[role="button"]:has-text("Next")').last
-                        if next_btn.is_visible(timeout=3000):
-                            print("Clicking Next (2/2)...")
-                            next_btn.click()
-                            human_delay(2, 3)
-                        else:
-                            print("⚠️ Next button not visible")
-                    except Exception as e:
-                        print(f"⚠️ Error clicking second Next: {e}")
-                    
-                    # Share post
-                    try:
-                        print("Waiting for Share button...")
-                        share_btn = page.locator('div[role="button"]:has-text("Share")').first
-                        if share_btn.is_visible(timeout=3000):
-                            print("Clicking 'Share'...")
-                            share_btn.click()
-                            human_delay(3, 4)
-                            print("✅ Post created successfully!")
-                        else:
-                            print("⚠️ Could not find share button")
-                    except Exception as e:
-                        print(f"⚠️ Error sharing post: {e}")
+                    # Click Post from the + menu
+                    page.evaluate("Array.from(document.querySelectorAll('svg')).find(s => s.getAttribute('aria-label') === 'Post')?.closest('a')?.click()")
+                    human_delay(2, 3)
+
+                    # Set image file
+                    print("Uploading post image...")
+                    page.locator('input[type="file"]').first.set_input_files(post_image)
+                    human_delay(3, 4)
+
+                    # Click Next (crop screen)
+                    print("Clicking Next (1/2)...")
+                    page.evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Next')?.click()")
+                    human_delay(2, 3)
+
+                    # Click Next (filters screen)
+                    print("Clicking Next (2/2)...")
+                    page.evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Next')?.click()")
+                    human_delay(2, 3)
+
+                    # Write caption
+                    print("Writing caption...")
+                    page.locator('textarea[aria-label="Write a caption…"]').click()
+                    page.locator('textarea[aria-label="Write a caption…"]').fill('Hi everyone!')
+                    human_delay(1, 2)
+
+                    # Click Share
+                    print("Clicking Share...")
+                    page.evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Share')?.click()")
+                    human_delay(3, 4)
+                    print("✅ Post created successfully!")
                 else:
                     print(f"⚠️ Post image not found at {post_image}")
+
             except Exception as e:
                 print(f"⚠️ Error creating post: {e}")
-            
-            # 18. CLOSE BROWSER
+            # 20. CLOSE BROWSER
             print("\n✅ All tasks completed! Closing browser...")
             human_delay(2, 3)
 
@@ -870,5 +638,6 @@ def create_account(email_number, use_vpn_country=None):
             time.sleep(30)
             return False
             
-        finally:
-            browser.close()
+        browser.close()
+
+
