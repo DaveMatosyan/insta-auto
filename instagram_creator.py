@@ -19,10 +19,82 @@ else:
     from config import GMAIL_EMAIL, GMAIL_PASSWORD
 
 
+# Default post captions for random selection
+DEFAULT_CAPTIONS = [
+    "Check me out! 📸",
+    "Living my best life ✨",
+    "Feeling good! 😊",
+    "Just vibing 💫",
+    "Smile more 😍",
+    "Life is beautiful 🌟",
+    "Blessed and grateful 🙏",
+    "One hot day! 🔥",
+    "Catch me if you can 😉",
+    "Love this moment 💕",
+    "Excited for what's ahead 🎉",
+    "Making memories 📷",
+    "Golden hour magic ✨",
+    "Feeling myself 💪",
+    "Living for moments like these 🌈",
+    "Good vibes only ✌️",
+    "Just being me 💯",
+    "This is my life 🌺",
+    "Taking it one day at a time 🌅",
+    "Spreading positivity 💖",
+]
+
+
 def human_delay(min_sec=1, max_sec=3):
     """Add random human-like delays between actions"""
     delay = random.uniform(min_sec, max_sec)
     time.sleep(delay)
+
+
+def get_random_image(image_dir=None, exclude_pattern=None):
+    """
+    Get a random image from the images directory
+    
+    Args:
+        image_dir (str): Path to the images directory (defaults to './images')
+        exclude_pattern (str): Pattern to exclude (e.g., filename or partial filename)
+        
+    Returns:
+        str: Full path to random image, or None if no images found
+    """
+    try:
+        # Use default images folder if not specified
+        if image_dir is None:
+            image_dir = os.path.join(os.path.dirname(__file__), 'images')
+        
+        if not os.path.exists(image_dir):
+            print(f"⚠️ Images directory not found: {image_dir}")
+            return None
+        
+        # Get list of valid image files
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+        image_files = [
+            f for f in os.listdir(image_dir)
+            if os.path.isfile(os.path.join(image_dir, f)) and
+            os.path.splitext(f)[1].lower() in valid_extensions
+        ]
+        
+        # Filter out excluded files
+        if exclude_pattern:
+            image_files = [f for f in image_files if exclude_pattern.lower() not in f.lower()]
+        
+        if not image_files:
+            print(f"⚠️ No image files found in {image_dir}" + (f" (excluding {exclude_pattern})" if exclude_pattern else ""))
+            return None
+        
+        # Randomly select one
+        selected_image = random.choice(image_files)
+        full_path = os.path.join(image_dir, selected_image)
+        print(f"📸 Randomly selected image: {selected_image}")
+        return full_path
+    
+    except Exception as e:
+        print(f"❌ Error getting random image: {e}")
+        return None
 
 
 def get_verification_code_wrapper(email_to_check, max_retries=15, retry_delay=3):
@@ -561,20 +633,19 @@ def create_account(email_number, use_vpn_country=None):
             print("\n📸 Uploading profile picture...")
             human_delay(2, 3)
             try:
-                images_dir = os.path.join(os.path.dirname(__file__), 'images')
-                profile_pic = os.path.join(images_dir, 'profile.jpg')
+                profile_pic = get_random_image()
 
-                if os.path.exists(profile_pic):
+                if profile_pic:
                     print("Setting profile picture...")
                     page.locator('input[type="file"]').nth(1).set_input_files(profile_pic)
                     human_delay(3, 5)  # Wait for crop screen to appear
 
                     print("Clicking Save...")
                     page.evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Save')?.click()")
-                    human_delay(3, 4)
+                    human_delay(7, 9)
                     print("✅ Profile picture uploaded successfully!")
                 else:
-                    print(f"⚠️ Profile picture not found at {profile_pic}")
+                    print(f"⚠️ No profile picture image found in images folder")
 
             except Exception as e:
                 print(f"⚠️ Error uploading profile picture: {e}")
@@ -587,10 +658,11 @@ def create_account(email_number, use_vpn_country=None):
             print("\n📝 Creating first post...")
             human_delay(2, 3)
             try:
-                images_dir = os.path.join(os.path.dirname(__file__), 'images')
-                post_image = os.path.join(images_dir, 'post.png')
+                # Get post image, excluding the profile picture filename
+                exclude_file = os.path.basename(profile_pic) if profile_pic else None
+                post_image = get_random_image(exclude_pattern=exclude_file)
 
-                if os.path.exists(post_image):
+                if post_image:
                     # Click Post from the + menu
                     page.evaluate("Array.from(document.querySelectorAll('svg')).find(s => s.getAttribute('aria-label') === 'Post')?.closest('a')?.click()")
                     human_delay(2, 3)
@@ -612,8 +684,10 @@ def create_account(email_number, use_vpn_country=None):
 
                     # Write caption
                     print("Writing caption...")
+                    selected_caption = random.choice(DEFAULT_CAPTIONS)
                     page.locator('textarea[aria-label="Write a caption…"]').click()
-                    page.locator('textarea[aria-label="Write a caption…"]').fill('Hi everyone!')
+                    page.locator('textarea[aria-label="Write a caption…"]').fill(selected_caption)
+                    print(f"Caption: {selected_caption}")
                     human_delay(1, 2)
 
                     # Click Share
@@ -622,7 +696,7 @@ def create_account(email_number, use_vpn_country=None):
                     human_delay(3, 4)
                     print("✅ Post created successfully!")
                 else:
-                    print(f"⚠️ Post image not found at {post_image}")
+                    print(f"⚠️ No post image found in images folder")
 
             except Exception as e:
                 print(f"⚠️ Error creating post: {e}")
