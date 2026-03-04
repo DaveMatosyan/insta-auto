@@ -6,6 +6,7 @@ import random
 import string
 import subprocess
 import time
+from urllib.parse import urlparse
 
 
 def generate_random_string(length=8):
@@ -111,3 +112,25 @@ def generate_browser_fingerprint():
     }
     
     return fingerprint
+
+
+def parse_proxy_url(proxy_url):
+    """
+    Parse a proxy URL into Playwright's proxy dict format.
+    Splits credentials out so Playwright can authenticate properly.
+
+    Input:  "http://user:pass@host:port"
+    Output: {"server": "http://host:port", "username": "user", "password": "pass"}
+
+    Returns:
+        dict: Playwright-compatible proxy config, or None
+    """
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    proxy_dict = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+    if parsed.username:
+        proxy_dict["username"] = parsed.username
+    if parsed.password:
+        proxy_dict["password"] = parsed.password
+    return proxy_dict
