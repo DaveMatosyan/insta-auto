@@ -2,6 +2,8 @@
 Target scraper — find high-intent content buyers by scraping
 commenters from competitor creator posts and scoring their profiles.
 
+Scoring: Gemini 2.5 Flash AI analyzes each profile for gender + buyer intent.
+
 Usage:
     python target_scraper.py --creators handle1 handle2 --posts 9
     python target_scraper.py --creators handle1 --no-score --visible
@@ -9,13 +11,14 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 import random
 import re
 import time
 from datetime import datetime
 
-import gender_guesser.detector as gender_detector
+import google.generativeai as genai
 
 from account_storage import get_all_accounts
 from session_manager import open_session, close_session, ensure_logged_in
@@ -27,34 +30,10 @@ from config import (
     SCRAPER_OUTPUT_CSV,
 )
 
-# --- Gender detector (singleton) ---
-_gender_detector = gender_detector.Detector()
-
-# --- Buyer-intent keyword / emoji lists ---
-BUYER_EMOJIS = {'🔥', '❤️', '😍', '🤤', '👀', '💦', '😈', '💕', '😘', '💗',
-                '🥵', '❤️‍🔥', '💯', '🫦', '😏', '💋', '🥰', '💓', '💖', '🫠'}
-
-COMPLIMENT_KEYWORDS = [
-    'beautiful', 'gorgeous', 'stunning', 'amazing', 'perfect',
-    'incredible', 'sexy', 'hot', 'fine', 'wow', 'queen',
-    'goddess', 'angel', 'body', 'omg', 'damn', 'fire',
-    'babe', 'lovely', 'dream', 'breathtaking', 'flawless',
-]
-
-# Female bio keywords — used to filter OUT women
-FEMALE_BIO_KEYWORDS = [
-    'mom', 'mama', 'mother', 'she/her', 'girl boss', 'wifey',
-    'wife', 'queen', 'goddess', 'woman', 'lady', 'sister',
-    'daughter', 'feminine', 'her/', 'actress', 'model',
-    'makeup artist', 'beauty', 'lash', 'nail tech',
-]
-
-# Business/creator bio keywords — deprioritize competitors
-BUSINESS_BIO_KEYWORDS = [
-    'creator', 'influencer', 'brand', 'agency', 'marketing',
-    'photographer', 'booking', 'business', 'ceo', 'founder',
-    'dm for collab', 'promo', 'manager', 'talent',
-]
+# --- Gemini AI config ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-2.5-flash"
+AI_BATCH_SIZE = 15  # profiles per API call
 
 
 def human_delay(min_sec=1, max_sec=3):
@@ -247,110 +226,24 @@ def scrape_creator(page, creator, max_posts=9):
 
 
 # ---------------------------------------------------------------------------
-# 4. Score a profile for buyer potential
+# 4. Extract raw profile data (no scoring — just data collection)
 # ---------------------------------------------------------------------------
 
-def detect_gender(fullname):
+def get_profile_data(page, username):
     """
-    Detect gender from a display name using gender-guesser.
+    Visit a profile and extract raw data for AI scoring.
 
     Returns:
-        str: 'male', 'female', 'mostly_male', 'mostly_female',
-             'andy' (androgynous), or 'unknown'
-    """
-    if not fullname:
-        return 'unknown'
-    first_name = fullname.strip().split()[0].capitalize()
-    return _gender_detector.get_gender(first_name)
-
-
-def score_comment_intent(comment_text):
-    """
-    Score a comment for buyer intent based on emojis and keywords.
-
-    Returns:
-        (int, list): (score_points, list_of_reasons)
-    """
-    if not comment_text:
-        return 0, []
-
-    score = 0
-    reasons = []
-    text_lower = comment_text.lower()
-
-    # Check buyer emojis
-    emoji_hits = [e for e in BUYER_EMOJIS if e in comment_text]
-    if emoji_hits:
-        score += 2
-        reasons.append(f"buyer_emojis({len(emoji_hits)})")
-
-    # Check compliment keywords
-    keyword_hits = [kw for kw in COMPLIMENT_KEYWORDS if kw in text_lower]
-    if keyword_hits:
-        score += 2
-        reasons.append(f"compliments({','.join(keyword_hits[:3])})")
-
-    return score, reasons
-
-
-def is_female_profile(fullname, bio):
-    """
-    Check if a profile is likely female (to exclude).
-
-    Returns:
-        (bool, str): (is_female, reason)
-    """
-    # 1. Name-based detection
-    gender = detect_gender(fullname)
-    if gender in ('female', 'mostly_female'):
-        return True, f"name_female({fullname})"
-
-    # 2. Bio keyword detection
-    if bio:
-        bio_lower = bio.lower()
-        for kw in FEMALE_BIO_KEYWORDS:
-            if kw in bio_lower:
-                return True, f"bio_female({kw})"
-
-    return False, ""
-
-
-def score_profile(page, username, comment_text=""):
-    """
-    Visit a profile and assign a buyer quality score (0-10).
-
-    Scoring (max ~10 points):
-        +1  following > followers (consumer, not creator)
-        +1  followers < 5000 (not influencer)
-        +1  following 500+ (follows many creators)
-        +1  few posts (< 50) — lurker/consumer behavior
-        +1  account is public
-        +2  comment has buyer emojis (🔥❤️😍🤤👀)
-        +2  comment has compliment keywords
-        +1  no business/creator keywords in bio
-
-    Gender filter:
-        Returns None if detected as female (excluded)
-
-    Returns:
-        dict with score and profile data, or None on error/excluded
+        dict with profile data, or None on error
     """
     try:
         page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded", timeout=20000)
         human_delay(2, 3)
 
         profile = page.evaluate(r"""() => {
-            // Get follower/following counts from meta or header
-            const stats = [];
-            document.querySelectorAll('header li, header ul li').forEach(li => {
-                const text = li.textContent.replace(/,/g, '');
-                const num = parseInt(text.replace(/[^0-9]/g, ''));
-                if (!isNaN(num)) stats.push(num);
-            });
-
-            // Alternative: parse from meta description
+            // --- STATS: parse from meta description (most reliable) ---
             const meta = document.querySelector('meta[name="description"]');
-            let metaFollowers = 0, metaFollowing = 0, metaPosts = 0;
+            let metaFollowers = 0, metaFollowing = 0, metaPosts = 0, metaName = '';
             if (meta) {
                 const content = meta.getAttribute('content') || '';
                 const fm = content.match(/([\d,.]+[KkMm]?)\s*Follower/);
@@ -359,37 +252,98 @@ def score_profile(page, username, comment_text=""):
                 if (fm) metaFollowers = fm[1];
                 if (gm) metaFollowing = gm[1];
                 if (pm) metaPosts = pm[1];
+                // Meta often has: "... from Display Name (@handle)"
+                const nm = content.match(/from\s+(.+?)\s*\(@/);
+                if (nm) metaName = nm[1].trim();
             }
 
-            // Full display name
-            const nameEl = document.querySelector('header section span') ||
-                           document.querySelector('header h2');
-            const fullname = nameEl ? nameEl.textContent.trim() : '';
+            // --- STATS: fallback from header stats ---
+            const stats = [];
+            document.querySelectorAll('header li, header ul li').forEach(li => {
+                const text = li.textContent.replace(/,/g, '');
+                const num = parseInt(text.replace(/[^0-9]/g, ''));
+                if (!isNaN(num)) stats.push(num);
+            });
 
-            // Bio (grab all bio text, including link)
-            const bioEl = document.querySelector('header section > div:not(:first-child) span');
-            const bio = bioEl ? bioEl.textContent.trim() : '';
+            // --- FULL NAME: try multiple strategies ---
+            let fullname = '';
 
-            // External link in bio (linktree, etc.)
-            const linkEl = document.querySelector('header a[href*="l.instagram.com"]') ||
-                           document.querySelector('header a[rel="me nofollow noopener noreferrer"]');
+            // Strategy 1: <title> tag often has "Display Name (@handle)"
+            const titleMatch = document.title.match(/^(.+?)\s*\(@/);
+            if (titleMatch) fullname = titleMatch[1].trim();
+
+            // Strategy 2: meta description name
+            if (!fullname && metaName) fullname = metaName;
+
+            // Strategy 3: header span that looks like a name (not stats, not username)
+            if (!fullname) {
+                const headerSpans = document.querySelectorAll('header section span');
+                for (const sp of headerSpans) {
+                    const t = sp.textContent.trim();
+                    if (t && t.length > 1 && t.length < 60
+                        && !/^\d/.test(t) && !t.includes('follower') && !t.includes('following')
+                        && !t.includes('post') && !t.includes('@') && !t.includes('http')
+                        && !t.includes('Edit') && !t.includes('Follow')
+                        && !/^\d+$/.test(t.replace(/[,.\s]/g, ''))) {
+                        fullname = t;
+                        break;
+                    }
+                }
+            }
+
+            // --- BIO: try multiple strategies ---
+            let bio = '';
+
+            // Strategy 1: meta description often has bio after " - "
+            if (meta) {
+                const content = meta.getAttribute('content') || '';
+                const bioParts = content.split(' - ');
+                if (bioParts.length > 1) {
+                    const lastPart = bioParts[bioParts.length - 1].trim();
+                    if (!lastPart.startsWith('See Instagram')) {
+                        bio = lastPart.replace(/^[""]|[""]$/g, '').trim();
+                    }
+                }
+            }
+
+            // Strategy 2: look for bio in header section
+            if (!bio) {
+                const allSpans = document.querySelectorAll('header span');
+                for (const sp of allSpans) {
+                    const t = sp.textContent.trim();
+                    if (t && t.length > 10 && t.length < 300
+                        && !/^\d/.test(t) && !t.includes('follower') && !t.includes('following')
+                        && t !== fullname && !t.includes('Threads')
+                        && !t.includes('Edit profile') && !t.includes('Follow')) {
+                        bio = t;
+                        break;
+                    }
+                }
+            }
+
+            // --- EXTERNAL LINK ---
+            const linkEl = document.querySelector('a[href*="l.instagram.com"]') ||
+                           document.querySelector('a[rel="me nofollow noopener noreferrer"]') ||
+                           document.querySelector('header a[href^="http"]');
             const externalLink = linkEl ? linkEl.textContent.trim() : '';
 
-            // Check if private
-            const isPrivate = !!document.querySelector('h2:has-text("Private")') ||
-                              document.body.textContent.includes('This account is private');
+            // --- PRIVATE CHECK ---
+            const bodyText = document.body.textContent;
+            const isPrivate = bodyText.includes('This account is private') ||
+                              bodyText.includes('This Account is Private');
 
-            // Check if verified (blue checkmark)
-            const isVerified = !!document.querySelector('header svg[aria-label="Verified"]') ||
-                               !!document.querySelector('header span[title="Verified"]');
+            // --- VERIFIED ---
+            const isVerified = !!document.querySelector('svg[aria-label="Verified"]') ||
+                               !!document.querySelector('span[title="Verified"]');
 
-            // Check if has active story ring (colored ring around profile pic)
+            // --- STORY ---
             const hasStory = !!document.querySelector('header canvas') ||
                              !!document.querySelector('header div[role="button"] img[draggable]');
 
-            // Profile picture URL (to check if default/custom)
-            const pfpEl = document.querySelector('header img[alt*="profile picture"]') ||
-                          document.querySelector('header img[data-testid="user-avatar"]');
+            // --- PROFILE PIC ---
+            const pfpEl = document.querySelector('img[alt*="profile picture"]') ||
+                          document.querySelector('img[data-testid="user-avatar"]') ||
+                          document.querySelector('header img');
             const pfpUrl = pfpEl ? pfpEl.getAttribute('src') : '';
             const hasCustomPfp = pfpUrl && !pfpUrl.includes('44884218_345707102882519');
 
@@ -442,68 +396,6 @@ def score_profile(page, username, comment_text=""):
             followers = stats[1] if len(stats) >= 2 else 0
             following = stats[2] if len(stats) >= 3 else 0
 
-        # --- GENDER FILTER: Exclude females ---
-        female, female_reason = is_female_profile(fullname, bio)
-        if female:
-            print(f"      ♀️ Excluded @{username} — {female_reason}")
-            return None
-
-        # --- BUYER INTENT SCORING (max ~12) ---
-        score = 0
-        reasons = []
-
-        # +1: following > followers (consumer behavior)
-        if following > followers and followers > 0:
-            score += 1
-            reasons.append("consumer_ratio")
-
-        # +1: small account (not influencer)
-        if 0 < followers < 5000:
-            score += 1
-            reasons.append(f"small_acct({followers})")
-
-        # +1: follows many accounts (500+)
-        if following >= 500:
-            score += 1
-            reasons.append(f"follows_many({following})")
-
-        # +1: few posts = lurker/consumer
-        if 0 <= posts < 50:
-            score += 1
-            reasons.append(f"lurker({posts}_posts)")
-
-        # +1: public account
-        if not is_private:
-            score += 1
-            reasons.append("public")
-
-        # +2: buyer emojis in comment
-        # +2: compliment keywords in comment
-        comment_score, comment_reasons = score_comment_intent(comment_text)
-        score += comment_score
-        reasons.extend(comment_reasons)
-
-        # +1: no business/creator keywords in bio (not a competitor)
-        bio_lower = bio.lower()
-        has_business = any(kw in bio_lower for kw in BUSINESS_BIO_KEYWORDS)
-        if not has_business:
-            score += 1
-            reasons.append("not_business")
-
-        # +1: has custom profile pic (real person, not bot/empty)
-        if has_custom_pfp:
-            score += 1
-            reasons.append("has_pfp")
-
-        # -1: verified accounts are usually not buyers
-        if is_verified:
-            score -= 1
-            reasons.append("verified_penalty")
-
-        # Detect gender for reference (male/unknown kept)
-        detected_gender = detect_gender(fullname)
-
-        # Follow ratio for reference
         follow_ratio = round(following / max(followers, 1), 2)
 
         return {
@@ -514,24 +406,155 @@ def score_profile(page, username, comment_text=""):
             "follow_ratio": follow_ratio,
             "posts": posts,
             "fullname": fullname[:50],
-            "bio": bio[:100],
+            "bio": bio[:150],
             "external_link": external_link[:100],
             "is_private": is_private,
             "is_verified": is_verified,
             "has_story": has_story,
             "has_custom_pfp": has_custom_pfp,
-            "gender": detected_gender,
-            "score": score,
-            "reasons": ",".join(reasons),
         }
 
     except Exception as e:
-        print(f"      ⚠️ Could not score @{username}: {e}")
+        print(f"      ⚠️ Could not get data for @{username}: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
-# 5. Save results to CSV
+# 5. Gemini AI scoring — batch profiles for gender + buyer intent
+# ---------------------------------------------------------------------------
+
+def _init_gemini():
+    """Initialize Gemini client."""
+    api_key = GEMINI_API_KEY
+    if not api_key:
+        # Try loading from config file
+        key_file = os.path.join(os.path.dirname(__file__), "gemini_api_key.txt")
+        if os.path.exists(key_file):
+            with open(key_file, 'r') as f:
+                api_key = f.read().strip()
+    if not api_key:
+        raise ValueError(
+            "No Gemini API key found! Set GEMINI_API_KEY env var or create gemini_api_key.txt"
+        )
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(GEMINI_MODEL)
+
+
+def ai_score_batch(model, profiles_batch, comments_map):
+    """
+    Send a batch of profiles to Gemini for AI scoring.
+
+    Args:
+        model: Gemini GenerativeModel instance
+        profiles_batch: list of profile dicts (raw data from get_profile_data)
+        comments_map: dict {username: comment_text}
+
+    Returns:
+        list of dicts with AI scores: [{"username": "...", "gender": "...", "score": N, "reasons": "..."}, ...]
+    """
+    # Build the profile summaries for the prompt
+    profile_lines = []
+    for p in profiles_batch:
+        username = p['username']
+        comment = comments_map.get(username, '')
+        line = (
+            f"- @{username} | name: {p.get('fullname', 'N/A')} | "
+            f"bio: {p.get('bio', 'N/A')} | "
+            f"followers: {p.get('followers', 0)} | following: {p.get('following', 0)} | "
+            f"posts: {p.get('posts', 0)} | "
+            f"private: {p.get('is_private', False)} | verified: {p.get('is_verified', False)} | "
+            f"has_pfp: {p.get('has_custom_pfp', False)} | "
+            f"link: {p.get('external_link', '')} | "
+            f"comment: {comment[:120]}"
+        )
+        profile_lines.append(line)
+
+    profiles_text = "\n".join(profile_lines)
+
+    prompt = f"""You are a senior digital marketing analyst specializing in adult content creator monetization (OnlyFans, Fansly). You have 10+ years of experience identifying high-value male subscribers by analyzing their social media behavior. Your conversion predictions are used by top agencies to build targeted follower funnels.
+
+YOUR TASK: You are given a batch of Instagram profiles. These were scraped from the comment sections of popular female fitness models and bikini competitors. Your job is to determine for each profile:
+
+1. Is this a POTENTIAL BUYER — a male who would subscribe and pay for exclusive female content?
+2. Give each profile a score from 0 to 10 representing how likely they are to become a paying subscriber.
+
+HOW YOU WORK — Your analysis process for each profile:
+
+Step 1 — GENDER CLASSIFICATION:
+You look at username, display name, and bio TOGETHER to determine gender. You know from experience:
+- Usernames containing female names (jessica, sarah, maria, bella, nayla, bruna, claudia, sonya, michelle, julia, grace, maddy, dawn, kaela, rhia, nita, mae, yaneth) → female
+- Usernames with "girl", "queen", "mama", "babe", "princess", "goddess", "gurl", "diva", "lady", "bella", "chica", "miss" → female
+- Bio with "mom", "wife", "she/her", "actress", "model", "lash", "nail tech", "beauty", "feminine" → female
+- Bio with IFBB, NPC, bikini pro, fitness competitor, athlete, coach → usually female competitor (they comment on each other's posts, they are NOT buyers)
+- Usernames with male names (john, mike, james, ahmed, carlos, pedro, hermes, shariq, parth, steel) → male
+- Accounts that are clearly brands, shops, meal prep, supplement companies → business, not a buyer
+- When gender is truly unclear → "unknown"
+
+Step 2 — BUYER INTENT SCORING (0-10):
+You analyze behavioral signals that predict whether someone will pay for content:
+
+CRITICAL CONTEXT: These profiles were scraped from comments on FEMALE fitness/bikini model posts. Statistically 70-80% of commenters on these posts are male. So if gender is unclear but the account shows consumer behavior, assume likely male and score accordingly (don't give 0 to unknowns — give them 3-5 based on their signals).
+
+STRONG BUYER SIGNALS (each adds points):
+• Male gender confirmed → base score starts at 5
+• Gender unknown but consumer behavior → base score starts at 3
+• following > followers ratio (they consume, don't create) → +1-2
+• Follows 500+ accounts (follows many creators) → +1
+• Less than 50 posts (lurker/viewer, not a poster) → +1
+• Small account under 5000 followers (regular person, not influencer) → +1
+• Comment contains thirsty emojis: 🔥❤️😍🤤👀💦😈🥵💋😏 → +1-2
+• Comment contains compliment words: beautiful, gorgeous, stunning, hot, sexy, amazing, perfect, incredible, queen, goddess, damn, wow, fire, fine → +1-2
+• Has a profile picture (real person, engaged user) → +1
+• Private account with consumer ratio → still a buyer signal (they hide their activity)
+
+DISQUALIFYING SIGNALS (score 0-1):
+• Confirmed female — they don't buy female content → score 0
+• Business/brand account — no individual buyer → score 1
+• IFBB pro, fitness competitor, bikini athlete — they are peers, not customers → score 0
+• Verified celebrity — not a buyer → score 1
+• Bot-like account (0 followers, 0 following, no pfp) → score 0
+• Very high follower count 50k+ (they're creators themselves) → score 2
+
+PROFILES TO ANALYZE:
+{profiles_text}
+
+RESPOND WITH ONLY A RAW JSON ARRAY. No explanation, no markdown formatting, no ```json code blocks.
+Each object must have exactly these 4 fields: username, gender, score, reasons.
+The "reasons" field MUST list specific signals you found (e.g. "male name, consumer ratio 8.0, follows 2190, lurker 0 posts, thirsty emoji 🔥"). Never write just "Female." or "Gender unknown." — always explain WHY.
+
+Example:
+[{{"username":"john_doe123","gender":"male","score":8,"reasons":"male name John, following(2100)>followers(450), lurker 3 posts, thirsty comment with 🔥, has pfp"}},{{"username":"jessica.fit","gender":"female","score":0,"reasons":"female name Jessica, IFBB in bio, fitness competitor peer"}}]"""
+
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+
+        # Clean up response — remove markdown code blocks if present
+        if text.startswith("```"):
+            text = re.sub(r'^```\w*\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        text = text.strip()
+
+        results = json.loads(text)
+
+        # Validate structure
+        if not isinstance(results, list):
+            print(f"      ⚠️ AI returned non-list response, skipping batch")
+            return []
+
+        return results
+
+    except json.JSONDecodeError as e:
+        print(f"      ⚠️ AI response was not valid JSON: {e}")
+        print(f"      Raw response: {text[:300]}")
+        return []
+    except Exception as e:
+        print(f"      ⚠️ AI scoring failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# 6. Save results to CSV
 # ---------------------------------------------------------------------------
 
 def save_targets_csv(targets, output_path):
@@ -569,7 +592,7 @@ def save_targets_csv(targets, output_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Also merge into the main tracker CSV for daily_follow
+# 7. Also merge into the main tracker CSV for daily_follow
 # ---------------------------------------------------------------------------
 
 def merge_to_tracker(targets, tracker_path=None):
@@ -588,13 +611,19 @@ def merge_to_tracker(targets, tracker_path=None):
 
 
 # ---------------------------------------------------------------------------
-# 7. Main orchestrator
+# 8. Main orchestrator
 # ---------------------------------------------------------------------------
 
 def run_scraper(creators=None, max_posts=None, score_profiles=None,
                 min_score=None, headless=True, no_proxy=False):
     """
     Main scraper entry point.
+
+    Flow:
+        Phase 1: Scrape commenters from creator posts
+        Phase 2: Visit each commenter's profile → collect raw data
+        Phase 3: Send batches to Gemini AI for gender/buyer scoring
+        Phase 4: Save qualified targets to CSV
 
     Args:
         creators: list of Instagram handles to scrape
@@ -628,23 +657,32 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
     # Use the last (newest) account
     account = accounts[-1]
 
-    # Strip proxy if --no-proxy flag is set (use own IP for scraping)
     if no_proxy:
-        account = {**account, "proxy_url": None}
         print("🔓 No-proxy mode: using your own IP for scraping")
+
+    # Init Gemini if scoring is enabled
+    gemini_model = None
+    if score_profiles:
+        try:
+            gemini_model = _init_gemini()
+            print(f"🤖 Gemini AI scoring enabled ({GEMINI_MODEL})")
+        except Exception as e:
+            print(f"❌ Could not initialize Gemini: {e}")
+            print("   Set GEMINI_API_KEY env var or create gemini_api_key.txt")
+            return []
 
     print(f"\n{'='*60}")
     print(f"TARGET SCRAPER")
     print(f"Using account: @{account['username']}")
-    print(f"Proxy: {'NONE (direct)' if no_proxy or not account.get('proxy_url') else account['proxy_url'][:40] + '...'}")
+    print(f"Proxy: {'NONE (direct)' if no_proxy else 'auto-rotating (ProxyShare)'}")
     print(f"Creators to scrape: {len(creators)} accounts")
     print(f"Posts per creator: {max_posts}")
-    print(f"Score profiles: {score_profiles}")
+    print(f"Score profiles: {score_profiles} (Gemini AI)")
     print(f"Min score: {min_score}")
     print(f"{'='*60}\n")
 
-    # Open session
-    session = open_session(account, headless=headless, block_images=False)
+    # Open session (proxy auto-rotates via proxy_manager)
+    session = open_session(account, headless=headless, block_images=False, no_proxy=no_proxy)
     if not ensure_logged_in(session):
         print("❌ Could not log in, aborting")
         close_session(session, save_cookies=False)
@@ -671,38 +709,25 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
     print(f"Phase 1 complete: {len(all_commenters)} unique commenters")
     print(f"{'='*60}\n")
 
-    # --- Phase 2: Score profiles (optional) ---
-    targets = []
-    scored = 0
-    skipped = 0
+    # --- Phase 2: Collect profile data ---
+    all_profiles = []
+    comments_map = {}  # username → comment text
 
     if score_profiles and all_commenters:
-        print(f"Scoring {len(all_commenters)} profiles...\n")
+        print(f"📊 Collecting profile data for {len(all_commenters)} users...\n")
         usernames = list(all_commenters.keys())
 
         for i, username in enumerate(usernames):
             if i % 20 == 0 and i > 0:
-                print(f"   Progress: {i}/{len(usernames)} scored...")
+                print(f"   Progress: {i}/{len(usernames)} profiles collected...")
 
-            comment_text = all_commenters[username].get('comment', '')
-            profile_data = score_profile(page, username, comment_text=comment_text)
+            profile_data = get_profile_data(page, username)
             if profile_data:
-                scored += 1
-                if profile_data['score'] >= min_score:
-                    target = {
-                        **profile_data,
-                        "source_creator": all_commenters[username]['source_creator'],
-                        "source_post": all_commenters[username]['source_post'],
-                        "comment": comment_text[:100],
-                        "scraped_at": datetime.now().isoformat(),
-                    }
-                    targets.append(target)
-                else:
-                    skipped += 1
-            else:
-                skipped += 1
+                all_profiles.append(profile_data)
+                comment_text = all_commenters[username].get('comment', '')
+                comments_map[username] = comment_text
 
-            # Rate limit: wait between profile visits (longer for safety)
+            # Rate limit: wait between profile visits
             if i < len(usernames) - 1:
                 human_delay(4, 8)
 
@@ -717,7 +742,63 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
                 wait = random.uniform(120, 180)
                 print(f"   🛑 Long cooldown ({wait:.0f}s) to avoid ban...")
                 time.sleep(wait)
-    else:
+
+        print(f"\n   ✅ Collected data for {len(all_profiles)} profiles")
+
+    close_session(session, save_cookies=True)
+
+    # --- Phase 3: AI scoring with Gemini ---
+    targets = []
+
+    if score_profiles and all_profiles and gemini_model:
+        print(f"\n{'='*60}")
+        print(f"Phase 3: AI scoring {len(all_profiles)} profiles with Gemini...")
+        print(f"{'='*60}\n")
+
+        # Process in batches
+        for batch_start in range(0, len(all_profiles), AI_BATCH_SIZE):
+            batch = all_profiles[batch_start:batch_start + AI_BATCH_SIZE]
+            batch_end = min(batch_start + AI_BATCH_SIZE, len(all_profiles))
+            print(f"   🤖 Scoring batch {batch_start+1}-{batch_end} / {len(all_profiles)}...")
+
+            ai_results = ai_score_batch(gemini_model, batch, comments_map)
+
+            # Match AI results back to profile data
+            ai_map = {r['username']: r for r in ai_results if isinstance(r, dict)}
+
+            for profile in batch:
+                username = profile['username']
+                ai = ai_map.get(username, {})
+
+                gender = ai.get('gender', 'unknown')
+                score = ai.get('score', 0)
+                reasons = ai.get('reasons', 'ai_no_response')
+
+                # Filter: exclude females and low scores
+                if gender == 'female':
+                    print(f"      ♀️ Excluded @{username} — AI: female ({reasons})")
+                    continue
+
+                if score < min_score:
+                    continue
+
+                target = {
+                    **profile,
+                    "gender": gender,
+                    "score": score,
+                    "reasons": reasons[:150],
+                    "source_creator": all_commenters.get(username, {}).get('source_creator', ''),
+                    "source_post": all_commenters.get(username, {}).get('source_post', ''),
+                    "comment": comments_map.get(username, '')[:100],
+                    "scraped_at": datetime.now().isoformat(),
+                }
+                targets.append(target)
+
+            # Small delay between API calls to avoid rate limiting
+            if batch_end < len(all_profiles):
+                time.sleep(2)
+
+    elif not score_profiles:
         # No scoring — keep all commenters with default score
         for username, data in all_commenters.items():
             targets.append({
@@ -743,15 +824,14 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
                 "scraped_at": datetime.now().isoformat(),
             })
 
-    close_session(session, save_cookies=True)
-
-    # --- Phase 3: Save results ---
+    # --- Phase 4: Save results ---
+    total_scored = len(all_profiles) if score_profiles else 0
     print(f"\n{'='*60}")
     print(f"SCRAPER RESULTS")
     print(f"Total commenters found: {len(all_commenters)}")
-    print(f"Profiles scored: {scored}")
-    print(f"Qualified targets (score >= {min_score}): {len(targets)}")
-    print(f"Filtered out: {skipped}")
+    print(f"Profiles collected: {total_scored}")
+    print(f"AI-qualified targets (score >= {min_score}): {len(targets)}")
+    print(f"Filtered out: {total_scored - len(targets)}")
     print(f"{'='*60}\n")
 
     if targets:

@@ -5,7 +5,7 @@ Configuration settings for Instagram Account Generator
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "test308test11"  # Will become gagikzugaran+100@gmail.com, gagikzugaran+101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 25  # Starting number for email suffix
+START_NUMBER = 26  # Starting number for email suffix
 NUM_ACCOUNTS = 1   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
@@ -31,29 +31,29 @@ LOGS_DIR = "logs"
 
 # --- TARGET SCRAPER CONFIGURATION ---
 TARGET_CREATORS = [
-    # Mid-tier fitness / glamour / bikini models (100K-1M followers)
-    # Their comment sections are full of engaged male followers
-    "lauraliechap",         # 747K — IFBB Bikini Pro
-    "caileylonnie",         # 628K — swimsuit/bikini model
-    "whitneyjohns",         # 765K — fitness coach
-    "rebekahlea_fitness",   # 434K — fitness model
-    "daniellejjackson",     # 410K — fitness / mental health
-    "simonevillar",         # 361K — bikini model
-    "rena_serenaa",         # 242K — powerlifter
-    "jenronfit",            # 179K — IFBB Bikini Pro
-    "jibinpark_",           # 162K — Olympian bikini/figure
-    "jessicareneefit",      # 160K — IFBB Bikini Pro, vegan
-    "thephillyfitchick",    # 153K — fitness model / actress
-    "christinavargas",      # 148K — fitness model
-    "sandraahorvath",       # 131K — bikini body athlete
-    "cory_fit",             # 117K — health/performance coach
-    "nikki_trinidad_",      # 102K — bikini model, LA
-    # Larger accounts with heavy male engagement
-    "anacheri",             # ~500K — fitness / model / gym owner
-    "yanetegarcia",         # ~14M — ex weather girl / fitness
-    "nicolemejia",          # ~500K — fitness educator
-    "whitneysimmons",       # ~4M — fitness / Gymshark athlete
-    "tammyhembrow",         # ~17M — fitness / activewear brand
+    # --- Glamour / lingerie / thirst-trap models (male-dominated audience) ---
+    "iamyanetgarcia",       # ~15M — ex weather girl, lingerie/bikini content
+    "daboradenatooficial",  # ~8M — Brazilian glamour model
+    "francisca.undurraga",  # ~3M — Chilean model/TV, thirst-trap content
+    "anacheri",             # ~500K — gym/glamour model
+    "valentinanappi",       # ~7M — adult industry crossover, huge male audience
+    "missbosniaofficial",   # ~2M — glamour/bikini model
+    "viki_odintcova",       # ~5M — Russian glamour model
+    "svfriedmann",          # ~1M — glamour model, male audience
+    "mathildtantot",        # ~10M — French model/influencer, male-heavy
+    "realsofiajamora",      # ~3M — bikini/swimwear model
+    # --- Known OF/Fansly girls with Instagram presence ---
+    "hannahowo",            # ~3M — cosplay/e-girl, OF link in bio
+    "corabordeleau",        # ~600K — model/creator with OF
+    "amberrbayy",           # ~400K — bikini model/creator
+    "thejadeyanh",          # ~1M — cosplay/lingerie model
+    "jasminbhasin",         # ~200K — glamour model/creator
+    # --- Cosplay / e-girl (90%+ male audience) ---
+    "juliettmichele",       # ~600K — cosplay/lingerie
+    "soyneiva",             # ~5M — Colombian model, male-heavy
+    "katyaelisehenry",      # ~2M — glamour/bikini model
+    "niloufar.behboudi",    # ~800K — Persian model, male audience
+    "danielleyayalaa",      # ~5M — glamour/bikini, male-heavy
 ]
 SCRAPER_MAX_POSTS = 12         # Posts to scrape per creator (more posts = more commenters)
 SCRAPER_SCORE_PROFILES = True  # Visit each commenter profile to score quality

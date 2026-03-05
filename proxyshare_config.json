@@ -1,0 +1,11 @@
+{
+  "user_id": "ps-Matos000",
+  "password": "Killer621",
+  "server": "proxy.proxyshare.com",
+  "port": 5959,
+  "area": "US",
+  "city": "brent",
+  "session_life_minutes": 120,
+  "rotate_min_minutes": 40,
+  "rotate_max_minutes": 100
+}

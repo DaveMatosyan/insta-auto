@@ -1,78 +1,232 @@
 """
-Proxy pool management — load, assign, test proxies
+Proxy manager — auto-rotating ProxyShare residential proxies.
+
+ProxyShare rotation works by changing the session ID in the proxy URL.
+Each session ID = a unique residential IP that lasts up to `life` minutes.
+To get a new IP, generate a new random session ID.
+
+Proxy URL format:
+    http://{user_id}_area-{country}_city-{city}_session-{SESSION_ID}_life-{minutes}:{password}@{server}:{port}
 """
 
 import json
 import os
+import random
+import string
+import time
+from datetime import datetime, timedelta
+
 import requests
-from config import PROXIES_FILE, ACCOUNTS_PER_PROXY, JSON_FILE
+
+from config import JSON_FILE
 
 
-def load_proxies():
-    """Load proxy list from proxies.json"""
-    if not os.path.exists(PROXIES_FILE):
-        print(f"⚠️ {PROXIES_FILE} not found! Create it with your proxy list.")
-        return []
-    with open(PROXIES_FILE, 'r') as f:
-        return json.load(f)
+# --- ProxyShare configuration ---
+PROXYSHARE_CONFIG_FILE = "proxyshare_config.json"
+
+# Default config (override by editing proxyshare_config.json)
+DEFAULT_CONFIG = {
+    "user_id": "ps-Matos000",
+    "password": "Killer621",
+    "server": "proxy.proxyshare.com",
+    "port": 5959,
+    "area": "US",
+    "city": "brent",
+    "session_life_minutes": 120,         # max 120 min per IP
+    "rotate_min_minutes": 40,            # rotate after at least 40 min
+    "rotate_max_minutes": 100,           # rotate before 100 min (random between min-max)
+}
+
+# Track active sessions: {username: {"session_id": "...", "created_at": "...", "rotate_at": "..."}}
+SESSIONS_FILE = "proxy_sessions.json"
 
 
-def _load_accounts():
-    """Load accounts to check existing proxy assignments"""
-    if not os.path.exists(JSON_FILE):
-        return []
+def _load_config():
+    """Load ProxyShare config from file, or create default."""
+    if os.path.exists(PROXYSHARE_CONFIG_FILE):
+        with open(PROXYSHARE_CONFIG_FILE, 'r') as f:
+            cfg = json.load(f)
+            # Merge with defaults for any missing keys
+            merged = {**DEFAULT_CONFIG, **cfg}
+            return merged
+    else:
+        # Create default config file
+        with open(PROXYSHARE_CONFIG_FILE, 'w') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2)
+        print(f"📝 Created {PROXYSHARE_CONFIG_FILE} with default settings — edit if needed")
+        return DEFAULT_CONFIG
+
+
+def _load_sessions():
+    """Load active proxy sessions from file."""
+    if os.path.exists(SESSIONS_FILE):
+        try:
+            with open(SESSIONS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def _save_sessions(sessions):
+    """Save proxy sessions to file."""
+    with open(SESSIONS_FILE, 'w') as f:
+        json.dump(sessions, f, indent=2)
+
+
+def _generate_session_id(length=10):
+    """Generate a random session ID for ProxyShare."""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choices(chars, k=length))
+
+
+def _build_proxy_url(config, session_id):
+    """Build a full ProxyShare proxy URL with the given session ID."""
+    username = (
+        f"{config['user_id']}"
+        f"_area-{config['area']}"
+        f"_city-{config['city']}"
+        f"_session-{session_id}"
+        f"_life-{config['session_life_minutes']}"
+    )
+    return f"http://{username}:{config['password']}@{config['server']}:{config['port']}"
+
+
+def _random_rotate_time(config):
+    """Pick a random rotation time between min and max minutes."""
+    min_m = config.get('rotate_min_minutes', 40)
+    max_m = config.get('rotate_max_minutes', 100)
+    return random.randint(min_m, max_m)
+
+
+def _is_session_expired(session_data, config):
+    """Check if a proxy session needs rotation."""
+    if not session_data:
+        return True
+
+    rotate_at = session_data.get('rotate_at')
+    if not rotate_at:
+        return True
+
     try:
-        with open(JSON_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return []
+        rotate_time = datetime.fromisoformat(rotate_at)
+        return datetime.now() >= rotate_time
+    except (ValueError, TypeError):
+        return True
 
 
-def get_assigned_proxies():
-    """Return set of proxy URLs already assigned to accounts"""
-    accounts = _load_accounts()
-    return {a.get("proxy_url") for a in accounts if a.get("proxy_url")}
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
-
-def assign_proxy(username=None):
+def get_fresh_proxy(username=None):
     """
-    Pick the next available proxy (fewest assignments).
+    Get a proxy URL for an account. Returns existing session if still valid,
+    or creates a new one with a fresh IP.
+
+    This simulates natural behavior — IP changes at random intervals
+    like a real person switching between wifi/mobile networks.
+
+    Args:
+        username: Instagram username (for per-account session tracking)
 
     Returns:
-        str: proxy URL, or None if no proxies available
+        str: proxy URL ready to use, or None if no config
     """
-    proxies = load_proxies()
-    if not proxies:
-        return None
+    config = _load_config()
+    sessions = _load_sessions()
 
-    accounts = _load_accounts()
-    # Count how many accounts use each proxy
-    usage = {}
-    for p in proxies:
-        usage[p["url"]] = 0
-    for a in accounts:
-        purl = a.get("proxy_url")
-        if purl and purl in usage:
-            usage[purl] += 1
+    key = username or "_default"
+    current = sessions.get(key)
 
-    # Find proxy with fewest assignments (respecting ACCOUNTS_PER_PROXY limit)
-    for proxy in proxies:
-        if usage.get(proxy["url"], 0) < ACCOUNTS_PER_PROXY:
-            return proxy["url"]
+    if current and not _is_session_expired(current, config):
+        # Current session is still valid
+        proxy_url = _build_proxy_url(config, current['session_id'])
+        remaining = ""
+        try:
+            rotate_at = datetime.fromisoformat(current['rotate_at'])
+            mins_left = int((rotate_at - datetime.now()).total_seconds() / 60)
+            remaining = f" ({mins_left}min left)"
+        except:
+            pass
+        print(f"🌐 Reusing proxy session for @{username}{remaining}")
+        return proxy_url
 
-    # All at capacity — return the least-used one anyway
-    least_used = min(proxies, key=lambda p: usage.get(p["url"], 0))
-    print(f"⚠️ All proxies at capacity ({ACCOUNTS_PER_PROXY}/proxy). Reusing {least_used['label']}")
-    return least_used["url"]
+    # Need a new session — generate fresh IP
+    new_session_id = _generate_session_id()
+    rotate_in = _random_rotate_time(config)
+    rotate_at = datetime.now() + timedelta(minutes=rotate_in)
+
+    sessions[key] = {
+        'session_id': new_session_id,
+        'created_at': datetime.now().isoformat(),
+        'rotate_at': rotate_at.isoformat(),
+        'rotate_minutes': rotate_in,
+    }
+    _save_sessions(sessions)
+
+    proxy_url = _build_proxy_url(config, new_session_id)
+    action = "Rotated to new" if current else "Assigned new"
+    print(f"🔄 {action} proxy for @{username} (session={new_session_id}, rotate in {rotate_in}min)")
+    return proxy_url
+
+
+def force_rotate(username=None):
+    """
+    Force-rotate to a new IP immediately for a specific account.
+
+    Args:
+        username: Instagram username
+
+    Returns:
+        str: new proxy URL
+    """
+    sessions = _load_sessions()
+    key = username or "_default"
+    # Remove current session to force new one
+    sessions.pop(key, None)
+    _save_sessions(sessions)
+    print(f"🔄 Force-rotating proxy for @{username}...")
+    return get_fresh_proxy(username)
+
+
+def get_all_active_sessions():
+    """Return all active proxy sessions with their status."""
+    config = _load_config()
+    sessions = _load_sessions()
+    result = []
+    for key, data in sessions.items():
+        expired = _is_session_expired(data, config)
+        remaining = ""
+        if not expired:
+            try:
+                rotate_at = datetime.fromisoformat(data['rotate_at'])
+                mins_left = int((rotate_at - datetime.now()).total_seconds() / 60)
+                remaining = f"{mins_left}min"
+            except:
+                remaining = "?"
+        result.append({
+            'username': key,
+            'session_id': data.get('session_id', '?'),
+            'created_at': data.get('created_at', '?'),
+            'expired': expired,
+            'remaining': remaining,
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Legacy compatibility — keep old functions working
+# ---------------------------------------------------------------------------
+
+def assign_proxy(username=None):
+    """Legacy: assign a proxy to an account (now auto-rotates)."""
+    return get_fresh_proxy(username)
 
 
 def get_proxy(username):
-    """Get the proxy URL bound to a specific account"""
-    accounts = _load_accounts()
-    for a in accounts:
-        if a.get("username") == username:
-            return a.get("proxy_url")
-    return None
+    """Legacy: get proxy for account (now returns fresh or existing)."""
+    return get_fresh_proxy(username)
 
 
 def test_proxy(proxy_url, timeout=10):
@@ -86,32 +240,60 @@ def test_proxy(proxy_url, timeout=10):
         proxies = {"http": proxy_url, "https": proxy_url}
         r = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=timeout)
         ip = r.json().get("ip")
-        print(f"✅ Proxy OK → IP: {ip}  ({proxy_url[:40]}...)")
+        print(f"✅ Proxy OK → IP: {ip}")
         return ip
     except Exception as e:
-        print(f"❌ Proxy FAILED: {proxy_url[:40]}... → {e}")
+        print(f"❌ Proxy FAILED: {e}")
         return None
 
 
-def test_all_proxies():
-    """Test all proxies and print results"""
-    proxies = load_proxies()
-    if not proxies:
-        print("No proxies configured.")
+def test_current_proxies():
+    """Test all active proxy sessions."""
+    config = _load_config()
+    sessions = _load_sessions()
+
+    if not sessions:
+        print("No active proxy sessions. Generating a test proxy...")
+        url = get_fresh_proxy("_test")
+        test_proxy(url)
         return
 
-    print(f"\nTesting {len(proxies)} proxies...\n")
-    results = []
-    for p in proxies:
-        ip = test_proxy(p["url"])
-        results.append({"label": p["label"], "url": p["url"], "ip": ip, "ok": ip is not None})
+    print(f"\nTesting {len(sessions)} active proxy sessions...\n")
+    for key, data in sessions.items():
+        sid = data.get('session_id', '?')
+        url = _build_proxy_url(config, sid)
+        expired = _is_session_expired(data, config)
+        status = "EXPIRED" if expired else "ACTIVE"
+        print(f"  @{key} [{status}] session={sid}")
+        test_proxy(url)
+        print()
 
-    ok = sum(1 for r in results if r["ok"])
-    print(f"\n{'='*50}")
-    print(f"Results: {ok}/{len(results)} proxies working")
-    print(f"{'='*50}")
-    return results
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    test_all_proxies()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test_current_proxies()
+    elif len(sys.argv) > 1 and sys.argv[1] == "rotate":
+        username = sys.argv[2] if len(sys.argv) > 2 else "_test"
+        url = force_rotate(username)
+        print(f"  New proxy: {url[:60]}...")
+        test_proxy(url)
+    elif len(sys.argv) > 1 and sys.argv[1] == "status":
+        sessions = get_all_active_sessions()
+        if not sessions:
+            print("No active proxy sessions.")
+        else:
+            print(f"\n{'='*60}")
+            for s in sessions:
+                status = "❌ EXPIRED" if s['expired'] else f"✅ ACTIVE ({s['remaining']})"
+                print(f"  @{s['username']:20s} session={s['session_id']:12s} {status}")
+            print(f"{'='*60}")
+    else:
+        print("Usage:")
+        print("  python proxy_manager.py test     — test all active proxies")
+        print("  python proxy_manager.py rotate    — force-rotate to new IP")
+        print("  python proxy_manager.py status    — show active sessions")

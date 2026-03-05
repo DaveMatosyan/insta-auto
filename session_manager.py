@@ -1,6 +1,11 @@
 """
 Session manager — open/close browser sessions with proxy + fingerprint + cookies.
 Core module for consistent identity across logins.
+
+Proxy auto-rotation:
+    Each time open_session() is called, it gets a fresh proxy from proxy_manager.
+    The proxy manager auto-rotates IPs at random intervals (40-100 min) using
+    ProxyShare session IDs — so each account maintains its own rotating IP.
 """
 
 import os
@@ -10,6 +15,7 @@ from dataclasses import dataclass, field
 from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserContext, Page
 from config import SESSIONS_DIR, BLOCK_IMAGES
 from utils import parse_proxy_url
+from proxy_manager import get_fresh_proxy
 
 
 @dataclass
@@ -59,14 +65,20 @@ def _cookie_path(username):
     return os.path.join(SESSIONS_DIR, f"{username}_state.json")
 
 
-def open_session(account, headless=True, block_images=None):
+def open_session(account, headless=True, block_images=None, no_proxy=False):
     """
     Launch browser with proxy + fingerprint + cookies (auto-login).
+
+    Proxy auto-rotation:
+        Instead of using a static proxy_url from the account record,
+        this calls get_fresh_proxy(username) which auto-rotates IPs
+        at random intervals via ProxyShare session IDs.
 
     Args:
         account (dict): Account record from instagram_accounts.json
         headless (bool): Run headless or not
         block_images (bool): Override image blocking (None = use config default)
+        no_proxy (bool): Force direct connection (no proxy)
 
     Returns:
         Session object
@@ -74,10 +86,18 @@ def open_session(account, headless=True, block_images=None):
     if block_images is None:
         block_images = BLOCK_IMAGES
 
-    proxy_url = account.get("proxy_url")
     fingerprint = account.get("fingerprint", {})
     username = account.get("username", "unknown")
     cookie_file = _cookie_path(username)
+
+    # Auto-rotating proxy: get fresh or existing session from proxy_manager
+    if no_proxy:
+        proxy_url = None
+    else:
+        proxy_url = get_fresh_proxy(username)
+        # Fallback to static proxy from account record if proxy_manager returns None
+        if not proxy_url:
+            proxy_url = account.get("proxy_url")
 
     pw = sync_playwright().start()
 
