@@ -185,10 +185,31 @@ def needs_login(page):
     """Check if page shows the login form (cookies expired or not set)"""
     try:
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
-        time.sleep(3)
-        # If login form is visible, we need to log in
+        time.sleep(4)
+
+        # Method 1: desktop login form
         login_input = page.locator('input[name="username"]')
-        return login_input.is_visible(timeout=3000)
+        if login_input.is_visible(timeout=2000):
+            return True
+
+        # Method 2: mobile "Log in" link/button (no form, just a link)
+        body_text = page.evaluate("document.body.innerText")
+        if "/accounts/login" in page.url:
+            return True
+
+        # Method 3: check if page has "Log in" as primary action (logged-out mobile view)
+        login_link = page.evaluate("""() => {
+            const a = document.querySelector('a[href*="/accounts/login"]');
+            return a ? a.textContent.trim() : null;
+        }""")
+        if login_link and "log in" in login_link.lower():
+            return True
+
+        # Method 4: check page body for signs of logged-out state
+        if "Log in" in body_text[:200] and "Search" not in body_text[:500]:
+            return True
+
+        return False
     except:
         return True
 

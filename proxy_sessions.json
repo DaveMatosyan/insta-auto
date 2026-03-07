@@ -1,1 +1,26 @@
-{}
+{
+  "_default": {
+    "session_id": "xb6sffgghi",
+    "created_at": "2026-03-06T10:36:49.418282",
+    "rotate_at": "2026-03-06T11:50:49.418277",
+    "rotate_minutes": 74
+  },
+  "aria_sky_uk9ag": {
+    "session_id": "lUgreGoHeO",
+    "created_at": "2026-03-06T10:32:56.506293",
+    "rotate_at": "2026-03-06T11:51:56.506278",
+    "rotate_minutes": 79
+  },
+  "aria_sky_o3jys": {
+    "session_id": "O2uvCvmdVh",
+    "created_at": "2026-03-06T10:32:58.509327",
+    "rotate_at": "2026-03-06T11:37:58.509317",
+    "rotate_minutes": 65
+  },
+  "aria_sky_zo3aj": {
+    "session_id": "V48ob8VDSu",
+    "created_at": "2026-03-06T11:25:52.903687",
+    "rotate_at": "2026-03-06T12:58:52.903678",
+    "rotate_minutes": 93
+  }
+}

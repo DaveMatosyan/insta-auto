@@ -9,9 +9,8 @@ from config import (
     START_NUMBER,
     NUM_ACCOUNTS,
     JSON_FILE,
-    PROFILE_PIC_PATH,
-    POST_IMAGE_PATH,
-    POST_CAPTION
+    POST_CAPTION,
+    IMAGES_DIR,
 )
 from utils import print_section_header
 from proxy_manager import assign_proxy, test_proxy
@@ -26,9 +25,8 @@ def main():
     print(f"Starting number: {START_NUMBER}")
     print(f"Number of accounts to create: {NUM_ACCOUNTS}")
     print(f"Accounts will be saved to: {JSON_FILE}")
-    print(f"Profile picture: {PROFILE_PIC_PATH if PROFILE_PIC_PATH else 'Not set'}")
-    print(f"Post image: {POST_IMAGE_PATH if POST_IMAGE_PATH else 'Not set'}")
-    print(f"Post caption: {POST_CAPTION if POST_IMAGE_PATH else 'N/A'}")
+    print(f"Images folder: {IMAGES_DIR} (random selection)")
+    print(f"Post caption: {POST_CAPTION}")
     print("="*60 + "\n")
 
     successful = 0

@@ -4,9 +4,15 @@ commenters from competitor creator posts and scoring their profiles.
 
 Scoring: Gemini 2.5 Flash AI analyzes each profile for gender + buyer intent.
 
-Usage:
+3-step workflow:
+    Step 1: Scrape raw usernames
+        python target_scraper.py --scrape-only --count 50 --no-proxy
+    Step 2: Manually edit raw_commenters.txt — remove obvious non-buyers
+    Step 3: Score remaining with Gemini
+        python target_scraper.py --score-file raw_commenters.txt --no-proxy
+
+Legacy (all-in-one):
     python target_scraper.py --creators handle1 handle2 --posts 9
-    python target_scraper.py --creators handle1 --no-score --visible
 """
 
 import argparse
@@ -32,13 +38,59 @@ from config import (
 
 # --- Gemini AI config ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.5-flash"
-AI_BATCH_SIZE = 15  # profiles per API call
+GEMINI_MODEL = "gemini-2.5-flash"  # 2.0-flash deprecated for new projects; 2.5-flash works on fresh keys
+AI_BATCH_SIZE = 20  # profiles per API call
+
+# --- Hover interception noise (usernames to skip hovering) ---
+_HOVER_NOISE = {
+    'instagram', 'explore', 'accounts', 'reels', 'stories',
+    'direct', 'p', 'about', 'help', 'press', 'api', 'jobs',
+    'privacy', 'terms', 'locations', 'directory',
+}
 
 
 def human_delay(min_sec=1, max_sec=3):
     delay = random.uniform(min_sec, max_sec)
     time.sleep(delay)
+
+
+# ---------------------------------------------------------------------------
+# Hover API interception — parse Instagram's profile info endpoint response
+# ---------------------------------------------------------------------------
+
+def _parse_api_user(user: dict) -> dict:
+    """
+    Parse an Instagram API user object (from /api/v1/users/web_profile_info/)
+    into our standard profile dict format.
+
+    This is the same data we'd get from visiting a profile page, but
+    obtained by intercepting the API call triggered on username hover —
+    zero extra page navigation needed.
+    """
+    followers = int(user.get('edge_followed_by', {}).get('count', 0) or 0)
+    following = int(user.get('edge_follow', {}).get('count', 0) or 0)
+    posts = int(user.get('edge_owner_to_timeline_media', {}).get('count', 0) or 0)
+    pfp = user.get('profile_pic_url_hd') or user.get('profile_pic_url') or ''
+    bio_links = user.get('bio_links') or []
+    ext_link = user.get('external_url') or ''
+    if not ext_link and bio_links:
+        ext_link = bio_links[0].get('url') or bio_links[0].get('title') or ''
+    username = user.get('username', '')
+    return {
+        'username': username,
+        'profile_url': f'https://www.instagram.com/{username}/',
+        'followers': followers,
+        'following': following,
+        'follow_ratio': round(following / max(followers, 1), 2),
+        'posts': posts,
+        'fullname': (user.get('full_name') or '')[:50],
+        'bio': (user.get('biography') or '')[:150],
+        'external_link': ext_link[:100],
+        'is_private': bool(user.get('is_private', False)),
+        'is_verified': bool(user.get('is_verified', False)),
+        'has_story': False,   # not exposed by this endpoint
+        'has_custom_pfp': bool(pfp and '44884218' not in pfp),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +113,15 @@ def get_post_links(page, creator, max_posts=9):
     title = page.title()
     print(f"   URL: {current_url}")
     print(f"   Title: {title}")
+
+    # Debug: check page content for login walls / errors
+    page_debug = page.evaluate("""() => {
+        const text = document.body.innerText.substring(0, 500);
+        const allHrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.getAttribute('href')).slice(0, 30);
+        return {bodyPreview: text, hrefs: allHrefs};
+    }""")
+    print(f"   Body preview: {page_debug.get('bodyPreview', '')[:200]}")
+    print(f"   First hrefs: {page_debug.get('hrefs', [])[:10]}")
 
     # Scroll down multiple times to load more posts
     for scroll in range(4):
@@ -185,6 +246,35 @@ def scrape_post_commenters(page, post_path):
     commenters = [c for c in commenters if c['username'].lower() not in noise and len(c['username']) > 2]
 
     print(f"   Post {post_path[:20]}... → {len(commenters)} commenters")
+
+    # --- Hover over visible comment author links to trigger profile API calls ---
+    # Instagram fires GET /api/v1/users/web_profile_info/?username=X on hover.
+    # A response listener (set up in run_scrape_only) intercepts those responses
+    # and stores full profile data — so no extra page navigation is needed later.
+    try:
+        target_usernames = {c['username'] for c in commenters}
+        links = page.locator('ul li a[href^="/"], article a[href^="/"]').all()
+        hovered = 0
+        for link in links:
+            try:
+                href = (link.get_attribute('href', timeout=500) or '').strip('/')
+                if (href and href not in _HOVER_NOISE and '/' not in href
+                        and href in target_usernames):
+                    link.scroll_into_view_if_needed()
+                    link.hover(timeout=2000)
+                    time.sleep(0.35)    # short wait for API call to fire
+                    hovered += 1
+                    if hovered >= 30:   # cap per post to avoid being too mechanical
+                        break
+            except Exception:
+                continue
+        if hovered:
+            page.mouse.move(10, 10)     # move away so last popup closes
+            time.sleep(0.3)
+            print(f"   ↩️  Hovered {hovered} links (profile data collected via API)")
+    except Exception:
+        pass
+
     return commenters
 
 
@@ -420,7 +510,110 @@ def get_profile_data(page, username):
 
 
 # ---------------------------------------------------------------------------
-# 5. Gemini AI scoring — batch profiles for gender + buyer intent
+# 5. Mechanical pre-filter — cut obvious non-buyers before Gemini
+# ---------------------------------------------------------------------------
+
+FEMALE_NAMES = {
+    'jessica', 'sarah', 'maria', 'bella', 'nayla', 'bruna', 'claudia', 'sonya',
+    'michelle', 'julia', 'grace', 'maddy', 'dawn', 'kaela', 'rhia', 'nita',
+    'mae', 'yaneth', 'anna', 'emma', 'olivia', 'sophia', 'ava', 'mia',
+    'isabella', 'emily', 'abigail', 'ella', 'chloe', 'lily', 'hannah', 'natalie',
+    'samantha', 'victoria', 'madison', 'elizabeth', 'avery', 'scarlett', 'aria',
+    'penelope', 'layla', 'riley', 'zoey', 'nora', 'camila', 'elena', 'luna',
+    'savannah', 'aubrey', 'brooklyn', 'leah', 'zoe', 'stella', 'hazel', 'ellie',
+    'paisley', 'audrey', 'skylar', 'violet', 'claire', 'bella', 'lucy', 'aaliyah',
+    'caroline', 'genesis', 'emilia', 'kennedy', 'maya', 'willow', 'kinsley',
+    'naomi', 'ariana', 'ruby', 'eva', 'serenity', 'autumn', 'adeline', 'hailey',
+    'gianna', 'valentina', 'isla', 'eliana', 'quinn', 'nevaeh', 'ivy', 'sadie',
+    'piper', 'lydia', 'alexa', 'josie', 'andrea', 'gabriella', 'alejandra',
+    'daniela', 'fernanda', 'paola', 'valeria', 'mariana', 'catalina', 'tatiana',
+    'priya', 'aisha', 'fatima', 'yasmin', 'lina', 'nina', 'tara', 'diana',
+    'laura', 'paula', 'sandra', 'monica', 'carmen', 'rosa', 'angela', 'lisa',
+    'jennifer', 'amanda', 'stephanie', 'heather', 'ashley', 'brittany', 'kelsey',
+    'megan', 'rachel', 'rebecca', 'katherine', 'amber', 'nicole', 'tiffany',
+    'crystal', 'vanessa', 'bianca', 'jasmine', 'alicia', 'veronica', 'kathleen',
+}
+
+FEMALE_KEYWORDS = {
+    'girl', 'queen', 'mama', 'babe', 'princess', 'goddess', 'gurl', 'diva',
+    'lady', 'chica', 'miss', 'missy', 'wifey', 'sissy', 'barbie', 'dolly',
+}
+
+BRAND_KEYWORDS = {
+    'shop', 'store', 'brand', 'official', 'media', 'agency', 'studio',
+    'photography', 'magazine', 'daily', 'news', 'memes', 'repost', 'fanpage',
+    'clothing', 'apparel', 'boutique', 'fitness_brand', 'supplements',
+    'coaching', 'nutrition', 'mealprep', 'podcast', 'radio',
+}
+
+COMPETITOR_BIO_KEYWORDS = {
+    'ifbb', 'npc', 'bikini pro', 'figure pro', 'wellness pro',
+    'fitness competitor', 'bodybuilding', 'physique', 'wbff',
+    'olympia', 'arnold classic', 'prep coach',
+}
+
+
+def pre_filter_profile(profile, comment=''):
+    """
+    Mechanical pre-filter. Returns (keep, reason) tuple.
+    keep=True means send to Gemini, keep=False means skip.
+    """
+    username = profile.get('username', '').lower()
+    fullname = profile.get('fullname', '').lower()
+    bio = profile.get('bio', '').lower()
+    followers = profile.get('followers', 0)
+    following = profile.get('following', 0)
+    posts = profile.get('posts', 0)
+    has_pfp = profile.get('has_custom_pfp', False)
+
+    # --- BOT: no followers, no following, no pfp ---
+    if followers == 0 and following == 0 and not has_pfp:
+        return False, "bot (0/0/no pfp)"
+
+    # --- BIG CREATOR: 50k+ followers = they're a creator, not buyer ---
+    if followers >= 50000:
+        return False, f"big creator ({followers} followers)"
+
+    # --- FEMALE NAME in username ---
+    username_clean = re.sub(r'[_.\d]+', ' ', username).strip()
+    for name in FEMALE_NAMES:
+        if name in username_clean.split() or username_clean.startswith(name):
+            return False, f"female name '{name}' in username"
+
+    # --- FEMALE NAME in fullname ---
+    fullname_words = fullname.split()
+    for name in FEMALE_NAMES:
+        if name in fullname_words:
+            return False, f"female name '{name}' in fullname"
+
+    # --- FEMALE KEYWORDS in username ---
+    for kw in FEMALE_KEYWORDS:
+        if kw in username:
+            return False, f"female keyword '{kw}' in username"
+
+    # --- BRAND/BUSINESS ---
+    for kw in BRAND_KEYWORDS:
+        if kw in username:
+            return False, f"brand keyword '{kw}' in username"
+
+    # --- FITNESS COMPETITOR in bio ---
+    for kw in COMPETITOR_BIO_KEYWORDS:
+        if kw in bio:
+            return False, f"competitor keyword '{kw}' in bio"
+
+    # --- FEMALE BIO signals ---
+    female_bio_signals = ['she/her', 'mom of', 'mother of', 'wife of', 'wifey',
+                          'nail tech', 'lash tech', 'esthetician', 'makeup artist',
+                          'model ', 'actress', 'dancer', 'onlyfans.com']
+    for sig in female_bio_signals:
+        if sig in bio:
+            return False, f"female bio signal '{sig}'"
+
+    return True, "passed"
+
+
+# ---------------------------------------------------------------------------
+# 6. Gemini AI scoring — batch profiles for gender + buyer intent
 # ---------------------------------------------------------------------------
 
 def _init_gemini():
@@ -525,32 +718,43 @@ The "reasons" field MUST list specific signals you found (e.g. "male name, consu
 Example:
 [{{"username":"john_doe123","gender":"male","score":8,"reasons":"male name John, following(2100)>followers(450), lurker 3 posts, thirsty comment with 🔥, has pfp"}},{{"username":"jessica.fit","gender":"female","score":0,"reasons":"female name Jessica, IFBB in bio, fitness competitor peer"}}]"""
 
-    try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            text = response.text.strip()
 
-        # Clean up response — remove markdown code blocks if present
-        if text.startswith("```"):
-            text = re.sub(r'^```\w*\n?', '', text)
-            text = re.sub(r'\n?```$', '', text)
-        text = text.strip()
+            # Clean up response — remove markdown code blocks if present
+            if text.startswith("```"):
+                text = re.sub(r'^```\w*\n?', '', text)
+                text = re.sub(r'\n?```$', '', text)
+            text = text.strip()
 
-        results = json.loads(text)
+            results = json.loads(text)
 
-        # Validate structure
-        if not isinstance(results, list):
-            print(f"      ⚠️ AI returned non-list response, skipping batch")
+            # Validate structure
+            if not isinstance(results, list):
+                print(f"      ⚠️ AI returned non-list response, skipping batch")
+                return []
+
+            return results
+
+        except json.JSONDecodeError as e:
+            print(f"      ⚠️ AI response was not valid JSON: {e}")
+            print(f"      Raw response: {text[:300]}")
+            return []
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                wait = min(30 * (2 ** attempt), 300)  # 30s, 60s, 120s, 240s, 300s
+                print(f"      ⏳ Rate limited (attempt {attempt+1}/{max_retries}), waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            print(f"      ⚠️ AI scoring failed: {e}")
             return []
 
-        return results
-
-    except json.JSONDecodeError as e:
-        print(f"      ⚠️ AI response was not valid JSON: {e}")
-        print(f"      Raw response: {text[:300]}")
-        return []
-    except Exception as e:
-        print(f"      ⚠️ AI scoring failed: {e}")
-        return []
+    print(f"      ⚠️ AI scoring failed after {max_retries} retries (quota exhausted)")
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +815,478 @@ def merge_to_tracker(targets, tracker_path=None):
 
 
 # ---------------------------------------------------------------------------
-# 8. Main orchestrator
+# 8a. Scrape-only mode — just collect usernames, save to file
+# ---------------------------------------------------------------------------
+
+RAW_COMMENTERS_TXT = os.path.join(os.path.dirname(__file__), "raw_commenters.txt")
+RAW_COMMENTERS_JSON = os.path.join(os.path.dirname(__file__), "raw_commenters.json")
+
+
+def run_scrape_only(creators=None, max_posts=None, count=50,
+                    headless=True, no_proxy=False, min_score=None):
+    """
+    Full pipeline with crash-safe incremental saves:
+        1. Scrape ~count usernames from creator comments → save to disk
+        2. Process in batches of AI_BATCH_SIZE:
+           visit profiles → pre-filter → Gemini score → save to CSV
+        3. Resume-safe: skips already-processed usernames on restart
+
+    Args:
+        count: how many raw usernames to scrape before processing
+    """
+    creators = creators or TARGET_CREATORS
+    max_posts = max_posts or SCRAPER_MAX_POSTS
+    if min_score is None:
+        min_score = SCRAPER_MIN_SCORE
+
+    accounts = get_all_accounts()
+    if not accounts:
+        print("❌ No accounts available!")
+        return
+
+    # Pick account with valid cookies
+    account = None
+    for acc in reversed(accounts):
+        cookie_file = os.path.join("sessions", f"{acc['username']}_state.json")
+        if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 5000:
+            account = acc
+            print(f"🔑 Using account @{acc['username']} (has valid cookies)")
+            break
+    if account is None:
+        account = accounts[-1]
+        print(f"⚠️ No account with valid cookies, trying @{account['username']}")
+
+    # Init Gemini
+    try:
+        gemini_model = _init_gemini()
+        print(f"🤖 Gemini AI ready ({GEMINI_MODEL})")
+    except Exception as e:
+        print(f"❌ Could not initialize Gemini: {e}")
+        return
+
+    # Load already-processed usernames (from CSV + a "visited" checkpoint file)
+    already_processed = set()
+    if os.path.exists(SCRAPER_OUTPUT_CSV):
+        with open(SCRAPER_OUTPUT_CSV, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f, delimiter=';')
+            for row in reader:
+                already_processed.add(row.get('username', ''))
+
+    # Checkpoint file: tracks ALL visited usernames (including filtered/low-score ones)
+    checkpoint_file = os.path.join(os.path.dirname(__file__), "scrape_checkpoint.json")
+    checkpoint = {"visited": [], "scraped_commenters": {}}
+    if os.path.exists(checkpoint_file):
+        try:
+            with open(checkpoint_file, 'r') as f:
+                checkpoint = json.load(f)
+            print(f"📋 Loaded checkpoint: {len(checkpoint.get('visited', []))} previously visited")
+        except:
+            pass
+    visited_set = set(checkpoint.get("visited", []))
+    # Merge CSV usernames into visited set too
+    visited_set.update(already_processed)
+
+    print(f"\n{'='*60}")
+    print(f"SCRAPE → FILTER → SCORE PIPELINE")
+    print(f"Account: @{account['username']}")
+    print(f"Proxy: {'NONE (direct)' if no_proxy else 'auto-rotating'}")
+    print(f"Creators: {len(creators)} | Posts/creator: {max_posts}")
+    print(f"Target count: {count} raw usernames")
+    print(f"Min score: {min_score}")
+    print(f"Already processed: {len(visited_set)}")
+    print(f"{'='*60}\n")
+
+    session = open_session(account, headless=headless, block_images=False, no_proxy=no_proxy)
+    if not ensure_logged_in(session):
+        print("❌ Could not log in, aborting")
+        close_session(session, save_cookies=False)
+        return
+
+    page = session.page
+
+    # --- Set up hover-based profile API interception ---
+    # While scraping comments we hover over username links.
+    # Instagram fires /api/v1/users/web_profile_info/?username=X on hover.
+    # We intercept those responses here — giving us full profile data
+    # (followers, bio, private flag, etc.) with zero extra page navigation.
+    intercepted_profiles: dict = {}
+
+    def _on_response(response):
+        url = response.url
+        if '/api/v1/users/web_profile_info/' not in url:
+            return
+        try:
+            data = response.json()
+            user = (data.get('data', {}).get('user')
+                    or data.get('graphql', {}).get('user')
+                    or {})
+            uname = user.get('username', '')
+            if uname:
+                intercepted_profiles[uname] = _parse_api_user(user)
+        except Exception:
+            pass
+
+    page.on('response', _on_response)
+    print(f"📡 Profile API interception active (hover → no page visits needed)")
+
+    # --- PHASE 1: Scrape commenters (or resume from checkpoint) ---
+    saved_commenters = checkpoint.get("scraped_commenters", {})
+    if saved_commenters:
+        # Resume: we already have scraped commenters from a previous run
+        fresh_from_saved = [u for u in saved_commenters.keys() if u not in visited_set]
+        if len(fresh_from_saved) >= count:
+            print(f"📋 Resuming from checkpoint: {len(fresh_from_saved)} unvisited commenters available, skipping Phase 1")
+            all_commenters = saved_commenters
+        else:
+            print(f"📋 Checkpoint has {len(fresh_from_saved)} unvisited, need {count} — scraping more...")
+            saved_commenters = {}  # re-scrape fresh
+
+    if not saved_commenters:
+        print(f"\n--- PHASE 1: Scraping commenters (target: {count}) ---\n")
+        all_commenters = {}
+
+        for creator in creators:
+            try:
+                commenters = scrape_creator(page, creator, max_posts)
+                all_commenters.update(commenters)
+                print(f"   Running total: {len(all_commenters)} unique commenters")
+            except Exception as e:
+                print(f"❌ Error scraping @{creator}: {e}")
+
+            # Check if we have enough FRESH (unvisited) commenters
+            fresh_so_far = [u for u in all_commenters.keys() if u not in visited_set]
+            if len(fresh_so_far) >= count:
+                print(f"\n✅ Reached {count} fresh usernames — stopping early")
+                break
+
+            if creator != creators[-1]:
+                wait = random.uniform(45, 90)
+                print(f"⏳ Waiting {wait:.0f}s before next creator...")
+                time.sleep(wait)
+
+        # SAVE scraped commenters to disk (crash-safe)
+        checkpoint["scraped_commenters"] = all_commenters
+        with open(checkpoint_file, 'w') as f:
+            json.dump(checkpoint, f, ensure_ascii=False)
+        print(f"💾 Saved {len(all_commenters)} scraped commenters to checkpoint")
+
+    # Filter out already-visited, then take 'count' fresh ones
+    fresh = [u for u in all_commenters.keys() if u not in visited_set]
+    usernames_list = fresh[:count]
+    print(f"\n--- PHASE 1 DONE: {len(usernames_list)} fresh usernames to process (skipped {len(all_commenters) - len(fresh)} already visited) ---\n")
+
+    if not usernames_list:
+        print("❌ No fresh usernames to process! Try scraping different creators.")
+        close_session(session, save_cookies=True)
+        return
+
+    # --- PHASE 2+3 MERGED: Profile data → pre-filter → Gemini score → save ---
+    intercepted_count = len([u for u in usernames_list if u in intercepted_profiles])
+    fallback_count = len(usernames_list) - intercepted_count
+    print(f"--- PHASE 2+3: Filter + score ({AI_BATCH_SIZE} per batch) ---")
+    print(f"    📡 {intercepted_count}/{len(usernames_list)} profiles already captured via hover API")
+    print(f"    🌐 {fallback_count} profiles need page navigation (fallback)\n")
+
+    targets = []
+    total_filtered = 0
+    total_females = 0
+    total_low = 0
+    total_visited = 0
+    total_from_hover = 0
+    total_from_nav = 0
+    filter_reasons = {}
+
+    # Process in chunks of AI_BATCH_SIZE
+    for chunk_start in range(0, len(usernames_list), AI_BATCH_SIZE):
+        chunk_usernames = usernames_list[chunk_start:chunk_start + AI_BATCH_SIZE]
+        chunk_num = chunk_start // AI_BATCH_SIZE + 1
+        total_chunks = (len(usernames_list) + AI_BATCH_SIZE - 1) // AI_BATCH_SIZE
+
+        print(f"\n   === Batch {chunk_num}/{total_chunks} ({len(chunk_usernames)} usernames) ===")
+
+        # Step A: Collect profile data — hover interception first, page nav fallback
+        batch_profiles = []
+        batch_comments = {}
+        nav_needed = []  # usernames that weren't intercepted
+
+        for username in chunk_usernames:
+            visited_set.add(username)
+            total_visited += 1
+
+            if username in intercepted_profiles:
+                # ✅ Fast path: data already collected during comment hover
+                profile_data = intercepted_profiles[username]
+                total_from_hover += 1
+            else:
+                nav_needed.append(username)
+                profile_data = None   # will fill in below
+
+            if profile_data:
+                comment = all_commenters.get(username, {}).get('comment', '')
+                keep, reason = pre_filter_profile(profile_data, comment)
+                if keep:
+                    batch_profiles.append(profile_data)
+                    batch_comments[username] = comment
+                else:
+                    total_filtered += 1
+                    key = reason.split("'")[0].strip() if "'" in reason else reason
+                    filter_reasons[key] = filter_reasons.get(key, 0) + 1
+                    print(f"      ✂️ @{username} — {reason}")
+
+        # 🌐 Fallback: navigate to profiles that weren't intercepted
+        if nav_needed:
+            print(f"   🌐 Navigating to {len(nav_needed)} profiles (not in hover cache)...")
+            for i, username in enumerate(nav_needed):
+                profile_data = get_profile_data(page, username)
+                total_from_nav += 1
+
+                if not profile_data:
+                    continue
+
+                comment = all_commenters.get(username, {}).get('comment', '')
+                keep, reason = pre_filter_profile(profile_data, comment)
+                if keep:
+                    batch_profiles.append(profile_data)
+                    batch_comments[username] = comment
+                else:
+                    total_filtered += 1
+                    key = reason.split("'")[0].strip() if "'" in reason else reason
+                    filter_reasons[key] = filter_reasons.get(key, 0) + 1
+                    print(f"      ✂️ @{username} — {reason}")
+
+                if i < len(nav_needed) - 1:
+                    human_delay(4, 8)
+
+        # Rate limit break between chunks (only relevant when doing fallback nav)
+        if nav_needed and chunk_start > 0 and chunk_start % (AI_BATCH_SIZE * 2) == 0:
+            wait = random.uniform(20, 40)
+            print(f"   ⏳ Rate limit break ({wait:.0f}s)...")
+            time.sleep(wait)
+
+        # Longer cooldown every 100 page navigations
+        if total_from_nav > 0 and total_from_nav % 100 == 0:
+            wait = random.uniform(60, 120)
+            print(f"   🛑 Cooldown after {total_from_nav} page navigations ({wait:.0f}s)...")
+            time.sleep(wait)
+
+        # Step B: Gemini score survivors
+        batch_targets = []
+        if batch_profiles:
+            print(f"   🤖 Scoring {len(batch_profiles)} profiles with Gemini...")
+            ai_results = ai_score_batch(gemini_model, batch_profiles, batch_comments)
+            ai_map = {r['username']: r for r in ai_results if isinstance(r, dict)}
+
+            for profile in batch_profiles:
+                uname = profile['username']
+                ai = ai_map.get(uname, {})
+                gender = ai.get('gender', 'unknown')
+                score = ai.get('score', 0)
+                reasons = ai.get('reasons', 'ai_no_response')
+
+                if gender == 'female':
+                    total_females += 1
+                    continue
+                if score < min_score:
+                    total_low += 1
+                    continue
+
+                source = all_commenters.get(uname, {})
+                target = {
+                    **profile,
+                    "gender": gender,
+                    "score": score,
+                    "reasons": reasons[:150],
+                    "source_creator": source.get('source_creator', ''),
+                    "source_post": source.get('source_post', ''),
+                    "comment": batch_comments.get(uname, '')[:100],
+                    "scraped_at": datetime.now().isoformat(),
+                }
+                batch_targets.append(target)
+                targets.append(target)
+
+            # Step C: Save immediately after each batch
+            if batch_targets:
+                save_targets_csv(batch_targets, SCRAPER_OUTPUT_CSV)
+                merge_to_tracker(batch_targets)
+            time.sleep(2)
+
+        # Step D: Update checkpoint after every batch (crash-safe)
+        checkpoint["visited"] = list(visited_set)
+        with open(checkpoint_file, 'w') as f:
+            json.dump(checkpoint, f, ensure_ascii=False)
+
+        print(f"   ✅ Batch {chunk_num}: {len(batch_targets)} qualified | Running total: {len(targets)} | Visited: {total_visited}/{len(usernames_list)}")
+
+    close_session(session, save_cookies=True)
+
+    # Clear checkpoint since we're done (next run will re-scrape fresh)
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+        print("🗑️ Cleared checkpoint file")
+
+    # --- Final summary ---
+    print(f"\n{'='*60}")
+    print(f"PIPELINE COMPLETE")
+    print(f"Profiles processed: {total_visited}")
+    print(f"  📡 Via hover API (fast): {total_from_hover}")
+    print(f"  🌐 Via page navigation (fallback): {total_from_nav}")
+    print(f"Pre-filtered out: {total_filtered}")
+    for reason, cnt in sorted(filter_reasons.items(), key=lambda x: -x[1]):
+        print(f"   {reason}: {cnt}")
+    print(f"Sent to Gemini: {total_visited - total_filtered}")
+    print(f"Gemini females excluded: {total_females}")
+    print(f"Gemini low score excluded: {total_low}")
+    print(f"QUALIFIED TARGETS: {len(targets)}")
+    print(f"Saved to: {SCRAPER_OUTPUT_CSV}")
+    print(f"{'='*60}\n")
+
+
+# ---------------------------------------------------------------------------
+# 8b. Score-file mode — read usernames from file, visit profiles, score
+# ---------------------------------------------------------------------------
+
+def run_score_file(score_file, min_score=None, headless=True, no_proxy=False):
+    """
+    Read usernames from a text file, visit each profile, score with Gemini,
+    save qualified targets to CSV.
+    """
+    if min_score is None:
+        min_score = SCRAPER_MIN_SCORE
+
+    # Read usernames from text file
+    with open(score_file, 'r') as f:
+        usernames = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+    if not usernames:
+        print("❌ No usernames in file!")
+        return
+
+    # Load metadata (comments/sources) if available
+    comments_data = {}
+    if os.path.exists(RAW_COMMENTERS_JSON):
+        with open(RAW_COMMENTERS_JSON, 'r') as f:
+            comments_data = json.load(f)
+
+    print(f"\n{'='*60}")
+    print(f"SCORE-FILE MODE")
+    print(f"Input: {score_file} ({len(usernames)} usernames)")
+    print(f"Min score: {min_score}")
+    print(f"Batch size: {AI_BATCH_SIZE}")
+    print(f"{'='*60}\n")
+
+    # Init Gemini
+    try:
+        gemini_model = _init_gemini()
+        print(f"🤖 Gemini AI ready ({GEMINI_MODEL})")
+    except Exception as e:
+        print(f"❌ Could not initialize Gemini: {e}")
+        return
+
+    # Open browser session
+    accounts = get_all_accounts()
+    if not accounts:
+        print("❌ No accounts available!")
+        return
+
+    account = None
+    for acc in reversed(accounts):
+        cookie_file = os.path.join("sessions", f"{acc['username']}_state.json")
+        if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 5000:
+            account = acc
+            break
+    if account is None:
+        account = accounts[-1]
+
+    print(f"🔑 Using account @{account['username']}")
+
+    session = open_session(account, headless=headless, block_images=False, no_proxy=no_proxy)
+    if not ensure_logged_in(session):
+        print("❌ Could not log in, aborting")
+        close_session(session, save_cookies=False)
+        return
+
+    page = session.page
+    targets = []
+    total_females = 0
+    total_low = 0
+
+    batch_profiles = []
+    batch_comments = {}
+
+    for i, username in enumerate(usernames):
+        profile_data = get_profile_data(page, username)
+        if profile_data:
+            batch_profiles.append(profile_data)
+            batch_comments[username] = comments_data.get(username, {}).get('comment', '')
+
+        # Rate limiting
+        if i < len(usernames) - 1:
+            human_delay(4, 8)
+        if i > 0 and i % 25 == 0:
+            wait = random.uniform(30, 60)
+            print(f"   ⏳ Rate limit break ({wait:.0f}s)...")
+            time.sleep(wait)
+
+        # Score when batch is full or last profile
+        is_last = (i == len(usernames) - 1)
+        if len(batch_profiles) >= AI_BATCH_SIZE or (is_last and batch_profiles):
+            print(f"\n   🤖 Scoring batch ({len(batch_profiles)} profiles, {i+1}/{len(usernames)} done)...")
+
+            ai_results = ai_score_batch(gemini_model, batch_profiles, batch_comments)
+            ai_map = {r['username']: r for r in ai_results if isinstance(r, dict)}
+
+            batch_targets = []
+            for profile in batch_profiles:
+                uname = profile['username']
+                ai = ai_map.get(uname, {})
+                gender = ai.get('gender', 'unknown')
+                score = ai.get('score', 0)
+                reasons = ai.get('reasons', 'ai_no_response')
+
+                if gender == 'female':
+                    total_females += 1
+                    continue
+                if score < min_score:
+                    total_low += 1
+                    continue
+
+                source = comments_data.get(uname, {})
+                target = {
+                    **profile,
+                    "gender": gender,
+                    "score": score,
+                    "reasons": reasons[:150],
+                    "source_creator": source.get('source_creator', ''),
+                    "source_post": source.get('source_post', ''),
+                    "comment": source.get('comment', '')[:100],
+                    "scraped_at": datetime.now().isoformat(),
+                }
+                batch_targets.append(target)
+                targets.append(target)
+
+            if batch_targets:
+                save_targets_csv(batch_targets, SCRAPER_OUTPUT_CSV)
+                merge_to_tracker(batch_targets)
+
+            print(f"   ✅ Batch: {len(batch_targets)} qualified | Total: {len(targets)}")
+            batch_profiles = []
+            batch_comments = {}
+            time.sleep(2)
+
+    close_session(session, save_cookies=True)
+
+    print(f"\n{'='*60}")
+    print(f"SCORING COMPLETE")
+    print(f"Profiles visited: {len(usernames)}")
+    print(f"Females excluded: {total_females}")
+    print(f"Low score excluded: {total_low}")
+    print(f"Qualified targets (score >= {min_score}): {len(targets)}")
+    print(f"Saved to: {SCRAPER_OUTPUT_CSV}")
+    print(f"{'='*60}\n")
+
+
+# ---------------------------------------------------------------------------
+# 8c. Main orchestrator (legacy all-in-one)
 # ---------------------------------------------------------------------------
 
 def run_scraper(creators=None, max_posts=None, score_profiles=None,
@@ -648,14 +1323,24 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
         print("   Or use: python target_scraper.py --creators handle1 handle2")
         return []
 
-    # Pick an account to use for scraping
+    # Pick an account that has valid cookies
     accounts = get_all_accounts()
     if not accounts:
         print("❌ No accounts available! Create one first with main.py")
         return []
 
-    # Use the last (newest) account
-    account = accounts[-1]
+    # Prefer account with existing cookie file (most likely to be logged in)
+    import os as _os
+    account = None
+    for acc in reversed(accounts):
+        cookie_file = _os.path.join("sessions", f"{acc['username']}_state.json")
+        if _os.path.exists(cookie_file) and _os.path.getsize(cookie_file) > 5000:
+            account = acc
+            print(f"🔑 Using account @{acc['username']} (has valid cookies)")
+            break
+    if account is None:
+        account = accounts[-1]
+        print(f"⚠️ No account with valid cookies, trying @{account['username']}")
 
     if no_proxy:
         print("🔓 No-proxy mode: using your own IP for scraping")
@@ -709,23 +1394,26 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
     print(f"Phase 1 complete: {len(all_commenters)} unique commenters")
     print(f"{'='*60}\n")
 
-    # --- Phase 2: Collect profile data ---
-    all_profiles = []
-    comments_map = {}  # username → comment text
+    # --- Phase 2+3: Collect profiles in batches → score → save immediately ---
+    targets = []
+    total_profiles_collected = 0
+    total_females_excluded = 0
+    total_low_score = 0
 
     if score_profiles and all_commenters:
-        print(f"📊 Collecting profile data for {len(all_commenters)} users...\n")
         usernames = list(all_commenters.keys())
+        print(f"📊 Processing {len(usernames)} profiles (batch size: {AI_BATCH_SIZE})...\n")
+
+        batch_profiles = []
+        batch_comments = {}
 
         for i, username in enumerate(usernames):
-            if i % 20 == 0 and i > 0:
-                print(f"   Progress: {i}/{len(usernames)} profiles collected...")
-
+            # Collect profile data
             profile_data = get_profile_data(page, username)
             if profile_data:
-                all_profiles.append(profile_data)
-                comment_text = all_commenters[username].get('comment', '')
-                comments_map[username] = comment_text
+                batch_profiles.append(profile_data)
+                batch_comments[username] = all_commenters[username].get('comment', '')
+                total_profiles_collected += 1
 
             # Rate limit: wait between profile visits
             if i < len(usernames) - 1:
@@ -743,65 +1431,62 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
                 print(f"   🛑 Long cooldown ({wait:.0f}s) to avoid ban...")
                 time.sleep(wait)
 
-        print(f"\n   ✅ Collected data for {len(all_profiles)} profiles")
+            # When batch is full OR last profile — score and save immediately
+            is_last = (i == len(usernames) - 1)
+            if len(batch_profiles) >= AI_BATCH_SIZE or (is_last and batch_profiles):
+                batch_num = (total_profiles_collected // AI_BATCH_SIZE) + (1 if is_last else 0)
+                print(f"\n   🤖 Scoring batch ({len(batch_profiles)} profiles, {total_profiles_collected}/{len(usernames)} total)...")
 
-    close_session(session, save_cookies=True)
+                ai_results = ai_score_batch(gemini_model, batch_profiles, batch_comments)
+                ai_map = {r['username']: r for r in ai_results if isinstance(r, dict)}
 
-    # --- Phase 3: AI scoring with Gemini ---
-    targets = []
+                batch_targets = []
+                for profile in batch_profiles:
+                    uname = profile['username']
+                    ai = ai_map.get(uname, {})
+                    gender = ai.get('gender', 'unknown')
+                    score = ai.get('score', 0)
+                    reasons = ai.get('reasons', 'ai_no_response')
 
-    if score_profiles and all_profiles and gemini_model:
-        print(f"\n{'='*60}")
-        print(f"Phase 3: AI scoring {len(all_profiles)} profiles with Gemini...")
-        print(f"{'='*60}\n")
+                    if gender == 'female':
+                        total_females_excluded += 1
+                        continue
+                    if score < min_score:
+                        total_low_score += 1
+                        continue
 
-        # Process in batches
-        for batch_start in range(0, len(all_profiles), AI_BATCH_SIZE):
-            batch = all_profiles[batch_start:batch_start + AI_BATCH_SIZE]
-            batch_end = min(batch_start + AI_BATCH_SIZE, len(all_profiles))
-            print(f"   🤖 Scoring batch {batch_start+1}-{batch_end} / {len(all_profiles)}...")
+                    target = {
+                        **profile,
+                        "gender": gender,
+                        "score": score,
+                        "reasons": reasons[:150],
+                        "source_creator": all_commenters.get(uname, {}).get('source_creator', ''),
+                        "source_post": all_commenters.get(uname, {}).get('source_post', ''),
+                        "comment": batch_comments.get(uname, '')[:100],
+                        "scraped_at": datetime.now().isoformat(),
+                    }
+                    batch_targets.append(target)
+                    targets.append(target)
 
-            ai_results = ai_score_batch(gemini_model, batch, comments_map)
+                # SAVE IMMEDIATELY after each batch — never lose progress
+                if batch_targets:
+                    save_targets_csv(batch_targets, SCRAPER_OUTPUT_CSV)
+                    merge_to_tracker(batch_targets)
 
-            # Match AI results back to profile data
-            ai_map = {r['username']: r for r in ai_results if isinstance(r, dict)}
+                print(f"   ✅ Batch done: {len(batch_targets)} qualified, {len(targets)} total so far")
 
-            for profile in batch:
-                username = profile['username']
-                ai = ai_map.get(username, {})
+                # Clear batch for next round
+                batch_profiles = []
+                batch_comments = {}
+                time.sleep(2)  # Rate limit between API calls
 
-                gender = ai.get('gender', 'unknown')
-                score = ai.get('score', 0)
-                reasons = ai.get('reasons', 'ai_no_response')
-
-                # Filter: exclude females and low scores
-                if gender == 'female':
-                    print(f"      ♀️ Excluded @{username} — AI: female ({reasons})")
-                    continue
-
-                if score < min_score:
-                    continue
-
-                target = {
-                    **profile,
-                    "gender": gender,
-                    "score": score,
-                    "reasons": reasons[:150],
-                    "source_creator": all_commenters.get(username, {}).get('source_creator', ''),
-                    "source_post": all_commenters.get(username, {}).get('source_post', ''),
-                    "comment": comments_map.get(username, '')[:100],
-                    "scraped_at": datetime.now().isoformat(),
-                }
-                targets.append(target)
-
-            # Small delay between API calls to avoid rate limiting
-            if batch_end < len(all_profiles):
-                time.sleep(2)
+        print(f"\n   ✅ Finished: {total_profiles_collected} profiles processed")
 
     elif not score_profiles:
         # No scoring — keep all commenters with default score
+        no_score_targets = []
         for username, data in all_commenters.items():
-            targets.append({
+            target = {
                 "username": username,
                 "profile_url": f"https://www.instagram.com/{username}/",
                 "score": 0,
@@ -822,21 +1507,25 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
                 "source_post": data['source_post'],
                 "comment": data.get('comment', '')[:100],
                 "scraped_at": datetime.now().isoformat(),
-            })
+            }
+            no_score_targets.append(target)
+            targets.append(target)
 
-    # --- Phase 4: Save results ---
-    total_scored = len(all_profiles) if score_profiles else 0
+        if no_score_targets:
+            save_targets_csv(no_score_targets, SCRAPER_OUTPUT_CSV)
+            merge_to_tracker(no_score_targets)
+
+    close_session(session, save_cookies=True)
+
+    # --- Final summary ---
     print(f"\n{'='*60}")
     print(f"SCRAPER RESULTS")
     print(f"Total commenters found: {len(all_commenters)}")
-    print(f"Profiles collected: {total_scored}")
+    print(f"Profiles collected: {total_profiles_collected}")
+    print(f"Females excluded: {total_females_excluded}")
+    print(f"Low score excluded: {total_low_score}")
     print(f"AI-qualified targets (score >= {min_score}): {len(targets)}")
-    print(f"Filtered out: {total_scored - len(targets)}")
     print(f"{'='*60}\n")
-
-    if targets:
-        save_targets_csv(targets, SCRAPER_OUTPUT_CSV)
-        merge_to_tracker(targets)
 
     return targets
 
@@ -847,22 +1536,47 @@ def run_scraper(creators=None, max_posts=None, score_profiles=None,
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape high-intent targets from competitor creators")
-    parser.add_argument("--creators", nargs="+", help="Creator handles to scrape (e.g. handle1 handle2)")
-    parser.add_argument("--posts", type=int, default=None, help="Posts to scrape per creator (default: 12)")
-    parser.add_argument("--no-score", action="store_true", help="Skip profile scoring (faster, less accurate)")
-    parser.add_argument("--min-score", type=int, default=None, help="Minimum quality score 0-10 (default: 4)")
+    parser.add_argument("--creators", nargs="+", help="Creator handles to scrape")
+    parser.add_argument("--posts", type=int, default=None, help="Posts per creator (default: 12)")
+    parser.add_argument("--no-score", action="store_true", help="Skip profile scoring")
+    parser.add_argument("--min-score", type=int, default=None, help="Min quality score 0-10 (default: 4)")
     parser.add_argument("--visible", action="store_true", help="Show browser window")
-    parser.add_argument("--no-proxy", action="store_true", help="Use direct connection (no proxy)")
+    parser.add_argument("--no-proxy", action="store_true", help="Direct connection (no proxy)")
+
+    # New 3-step workflow
+    parser.add_argument("--scrape-only", action="store_true",
+                        help="Step 1: Just scrape usernames → raw_commenters.txt")
+    parser.add_argument("--count", type=int, default=50,
+                        help="How many usernames to collect (for --scrape-only, default: 50)")
+    parser.add_argument("--score-file", type=str, default=None,
+                        help="Step 3: Score usernames from file (e.g. raw_commenters.txt)")
     args = parser.parse_args()
 
-    run_scraper(
-        creators=args.creators,
-        max_posts=args.posts,
-        score_profiles=not args.no_score,
-        min_score=args.min_score,
-        headless=not args.visible,
-        no_proxy=args.no_proxy,
-    )
+    if args.scrape_only:
+        run_scrape_only(
+            creators=args.creators,
+            max_posts=args.posts,
+            count=args.count,
+            headless=not args.visible,
+            no_proxy=args.no_proxy,
+            min_score=args.min_score,
+        )
+    elif args.score_file:
+        run_score_file(
+            score_file=args.score_file,
+            min_score=args.min_score,
+            headless=not args.visible,
+            no_proxy=args.no_proxy,
+        )
+    else:
+        run_scraper(
+            creators=args.creators,
+            max_posts=args.posts,
+            score_profiles=not args.no_score,
+            min_score=args.min_score,
+            headless=not args.visible,
+            no_proxy=args.no_proxy,
+        )
 
 
 if __name__ == "__main__":
