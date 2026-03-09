@@ -1,3 +1,13 @@
-gmail_credentials.json 
-token.pickle 
-*.pickle 
+gmail_credentials.json
+token.pickle
+*.pickle
+gemini_api_key.txt
+*.env
+.env
+instagram_accounts.json
+proxies.json
+proxy_sessions.json
+proxyshare_config.json
+data/
+sessions/
+logs/ 

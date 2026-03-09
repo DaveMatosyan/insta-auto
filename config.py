@@ -1,11 +1,36 @@
 """
 Configuration settings for Instagram Account Generator
+
+All paths are absolute — derived from PROJECT_ROOT so that imports
+from any subdirectory (core/, scraper/, etc.) resolve correctly.
 """
+
+import os
+
+# --- PROJECT ROOT (absolute) ---
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# --- LOAD .env file (secrets — never committed to git) ---
+_env_file = os.path.join(PROJECT_ROOT, ".env")
+if os.path.exists(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+# --- API KEYS (loaded from .env) ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# --- SUPABASE ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "test308test11"  # Will become gagikzugaran+100@gmail.com, gagikzugaran+101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 30  # Starting number for email suffix
+START_NUMBER = 32  # Starting number for email suffix
 NUM_ACCOUNTS = 1   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
@@ -13,38 +38,41 @@ NUM_ACCOUNTS = 1   # Number of accounts to create
 USE_GMAIL_API = True  # Set to True to use Gmail API (recommended), False for IMAP
 
 # Gmail API Configuration
-GMAIL_CREDENTIALS_FILE = "gmail_credentials.json"  # Download from Google Cloud Console
+GMAIL_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "gmail_credentials.json")
 
 # Gmail IMAP Configuration (only used if USE_GMAIL_API = False)
 # Get App Password from: https://myaccount.google.com/apppasswords
 
 # --- PROXY CONFIGURATION ---
-PROXIES_FILE = "proxies.json"
+PROXIES_FILE = os.path.join(PROJECT_ROOT, "proxies.json")
 ACCOUNTS_PER_PROXY = 1
 
 # --- DAILY FOLLOW CONFIGURATION ---
 DAILY_FOLLOWS_PER_ACCOUNT = 5
 
-# --- SESSION / LOG DIRS ---
-SESSIONS_DIR = "sessions"
-LOGS_DIR = "logs"
+# --- SESSION / LOG / DATA DIRS ---
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
+LOGS_DIR = os.path.join(DATA_DIR, "logs")
+IMAGES_DIR = os.path.join(DATA_DIR, "images")
 
 # --- TARGET SCRAPER CONFIGURATION ---
 TARGET_CREATORS = [
-    # --- Top OF girls with big Instagram presence (95%+ male commenters) ---
-    "hannahowo",            # ~3M — cosplay/e-girl, OF link in bio
-    "corinnakopf",          # ~7M — OF creator, gaming/lifestyle
-    "iamyanetgarcia",       # ~15M — ex weather girl, lingerie/bikini
-    "danielleyayalaa",      # ~5M — glamour/bikini, male-heavy
-    "viki_odintcova",       # ~5M — Russian glamour model
-    "soyneiva",             # ~5M — Colombian model, male-heavy
-    "mathildtantot",        # ~10M — French model/influencer
-    "anacheri",             # ~500K — gym/glamour model, OF creator
+    # --- Already scraped (done) ---
+    # "hannahowo",            # ~3M -- PRIVATE, 0 results
+    # "corinnakopf",          # ~7M -- scraped, 208 leads
+    # "iamyanetgarcia",       # ~15M -- scraped
+    # "danielleyayalaa",      # ~5M -- scraped, 323 raw
+    # "viki_odintcova",       # ~5M -- scraped, 211 raw
+    # "soyneiva",             # ~5M -- scraped, 370 raw
+    # "mathildtantot",        # ~10M -- scraped, 413 raw
+    # "anacheri",             # ~500K -- scraped, 352 raw
+    # --- Add new creators below ---
 ]
 SCRAPER_MAX_POSTS = 12         # Posts to scrape per creator (more posts = more commenters)
 SCRAPER_SCORE_PROFILES = True  # Visit each commenter profile to score quality
 SCRAPER_MIN_SCORE = 4          # Minimum buyer-intent score (0-10) to keep a target
-SCRAPER_OUTPUT_CSV = "csv_management/csv_files/targets_scored.csv"
+# (targets are now stored in Supabase `targets_scored` table)
 
 # --- BANDWIDTH OPTIMIZATION ---
 BLOCK_IMAGES = True  # Block image loading to minimize bandwidth (disabled during upload steps)
@@ -53,10 +81,8 @@ BLOCK_IMAGES = True  # Block image loading to minimize bandwidth (disabled durin
 STOP_SEC = 3  # Pause between actions
 
 # --- FILE CONFIGURATION ---
-JSON_FILE = "instagram_accounts.json"  # File to save account info
+JSON_FILE = os.path.join(PROJECT_ROOT, "instagram_accounts.json")
 
 # --- PROFILE AND POST CONFIGURATION ---
-# Profile pic + post image are picked RANDOMLY from images/ folder (no hardcoded paths)
-IMAGES_DIR = "images"  # Folder with images for profile pics and posts
-POST_CAPTION = "Check me outtt! 📸"  # Caption for the post
-
+# Profile pic + post image are picked RANDOMLY from data/images/ folder (no hardcoded paths)
+POST_CAPTION = "Check me outtt!"

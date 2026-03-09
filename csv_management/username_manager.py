@@ -1,78 +1,66 @@
 """
-Manage username tracking - mark as used, check status, get unused.
+Manage username tracking — mark as used, check status, get unused.
 Tracks which of our accounts followed each target and when.
 
-CSV columns: username;used;followed_by;followed_at
+Backend: Supabase `usernames_tracker` table
+Columns: username (PK), used (bool), followed_by (text), followed_at (timestamptz)
 """
 
-import csv
-import os
 from datetime import datetime
-from pathlib import Path
 
+from db.supabase_client import supabase
 
-FIELDNAMES = ['username', 'used', 'followed_by', 'followed_at']
+TABLE = "usernames_tracker"
 
 
 class UsernameTracker:
-    """Manage username usage tracking from CSV file"""
+    """Manage username usage tracking via Supabase"""
 
     def __init__(self, tracker_file=None):
-        if tracker_file is None:
-            tracker_file = os.path.join(os.path.dirname(__file__),
-                                        "csv_files", "usernames_tracker.csv")
-        self.tracker_file = tracker_file
-        if not os.path.exists(tracker_file):
-            print(f"⚠️ {tracker_file} not found! Run the scraper first.")
+        # tracker_file is accepted for backward compatibility but ignored
+        pass
 
     def load_usernames(self):
-        """Load all usernames from tracker file
+        """Load all usernames from Supabase.
 
         Returns:
             dict: {username: {"used": bool, "followed_by": str, "followed_at": str}}
         """
         usernames = {}
-        if not os.path.exists(self.tracker_file):
-            return usernames
         try:
-            with open(self.tracker_file, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f, delimiter=';')
-                for row in reader:
-                    username = row.get('username', '').strip()
-                    if username:
-                        usernames[username] = {
-                            "used": row.get('used', 'false').lower() == 'true',
-                            "followed_by": row.get('followed_by', ''),
-                            "followed_at": row.get('followed_at', ''),
-                        }
+            resp = supabase.table(TABLE).select("*").execute()
+            for row in resp.data:
+                usernames[row["username"]] = {
+                    "used": row.get("used", False),
+                    "followed_by": row.get("followed_by", ""),
+                    "followed_at": row.get("followed_at", "") or "",
+                }
         except Exception as e:
-            print(f"❌ Error reading tracker file: {e}")
+            print(f"❌ Error reading tracker from Supabase: {e}")
         return usernames
 
     def _save_all(self, usernames):
-        """Write full tracker dict to CSV"""
+        """Write full tracker dict to Supabase (upsert all rows)"""
         try:
-            os.makedirs(os.path.dirname(self.tracker_file), exist_ok=True)
-            with open(self.tracker_file, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=FIELDNAMES, delimiter=';')
-                writer.writeheader()
-                for uname in sorted(usernames):
-                    info = usernames[uname]
-                    writer.writerow({
-                        'username': uname,
-                        'used': info['used'],
-                        'followed_by': info.get('followed_by', ''),
-                        'followed_at': info.get('followed_at', ''),
-                    })
+            rows = []
+            for uname in sorted(usernames):
+                info = usernames[uname]
+                rows.append({
+                    "username": uname,
+                    "used": info["used"],
+                    "followed_by": info.get("followed_by", ""),
+                    "followed_at": info.get("followed_at") or None,
+                })
+            if rows:
+                supabase.table(TABLE).upsert(rows).execute()
             return True
         except Exception as e:
-            print(f"❌ Error saving tracker file: {e}")
+            print(f"❌ Error saving tracker to Supabase: {e}")
             return False
 
     # --- backward compat wrapper ---
     def save_usernames(self, usernames):
         """Save usernames (accepts old dict format too)"""
-        # Convert old {username: bool} to new format
         converted = {}
         for k, v in usernames.items():
             if isinstance(v, dict):
@@ -83,50 +71,64 @@ class UsernameTracker:
 
     def exists(self, username):
         """Check if a username is already in the tracker"""
-        return username in self.load_usernames()
+        try:
+            resp = (supabase.table(TABLE)
+                    .select("username")
+                    .eq("username", username)
+                    .execute())
+            return len(resp.data) > 0
+        except Exception as e:
+            print(f"❌ Error checking existence: {e}")
+            return False
 
     def mark_as_used(self, username, followed_by=""):
         """Mark a username as followed by a specific account"""
-        usernames = self.load_usernames()
-
-        if username not in usernames:
-            # Auto-add if not present
-            usernames[username] = {"used": False, "followed_by": "", "followed_at": ""}
-
-        usernames[username]["used"] = True
-        usernames[username]["followed_by"] = followed_by
-        usernames[username]["followed_at"] = datetime.now().isoformat()
-
-        if self._save_all(usernames):
+        now = datetime.now().isoformat()
+        try:
+            # Upsert: creates if missing, updates if exists
+            supabase.table(TABLE).upsert({
+                "username": username,
+                "used": True,
+                "followed_by": followed_by,
+                "followed_at": now,
+            }).execute()
             print(f"✓ Marked '{username}' as followed by @{followed_by}")
             return True
-        return False
+        except Exception as e:
+            print(f"❌ Error marking as used: {e}")
+            return False
 
     def mark_as_unused(self, username):
         """Mark a username as unused (reset)"""
-        usernames = self.load_usernames()
-
-        if username not in usernames:
+        if not self.exists(username):
             print(f"⚠️ Username '{username}' not found in tracker!")
             return False
 
-        usernames[username]["used"] = False
-        usernames[username]["followed_by"] = ""
-        usernames[username]["followed_at"] = ""
-
-        if self._save_all(usernames):
+        try:
+            (supabase.table(TABLE)
+             .update({"used": False, "followed_by": "", "followed_at": None})
+             .eq("username", username)
+             .execute())
             print(f"✓ Marked '{username}' as unused")
             return True
-        return False
+        except Exception as e:
+            print(f"❌ Error marking as unused: {e}")
+            return False
 
     def get_unused_usernames(self, limit=None):
         """Get list of unused usernames"""
-        usernames = self.load_usernames()
-        unused = [u for u, info in usernames.items() if not info['used']]
-
-        if limit:
-            return unused[:limit]
-        return unused
+        try:
+            query = (supabase.table(TABLE)
+                     .select("username")
+                     .eq("used", False)
+                     .order("username"))
+            if limit:
+                query = query.limit(limit)
+            resp = query.execute()
+            return [row["username"] for row in resp.data]
+        except Exception as e:
+            print(f"❌ Error getting unused usernames: {e}")
+            return []
 
     def get_next_unused(self):
         """Get the first unused username"""
@@ -135,70 +137,106 @@ class UsernameTracker:
 
     def get_status(self, username=None):
         """Get status of usernames"""
-        usernames = self.load_usernames()
-
         if username:
-            if username in usernames:
-                info = usernames[username]
-                if info['used']:
-                    status = f"✓ FOLLOWED by @{info['followed_by']} at {info['followed_at']}"
+            try:
+                resp = (supabase.table(TABLE)
+                        .select("*")
+                        .eq("username", username)
+                        .execute())
+                if resp.data:
+                    row = resp.data[0]
+                    if row["used"]:
+                        status = f"✓ FOLLOWED by @{row['followed_by']} at {row['followed_at']}"
+                    else:
+                        status = "⚟ UNUSED"
+                    print(f"Username: '{username}' -> {status}")
+                    return row["used"]
                 else:
-                    status = "⚟ UNUSED"
-                print(f"Username: '{username}' -> {status}")
-                return info['used']
-            else:
-                print(f"⚠️ Username '{username}' not found!")
+                    print(f"⚠️ Username '{username}' not found!")
+                    return None
+            except Exception as e:
+                print(f"❌ Error getting status: {e}")
                 return None
         else:
-            total = len(usernames)
-            used = sum(1 for info in usernames.values() if info['used'])
-            unused = total - used
+            try:
+                all_resp = supabase.table(TABLE).select("used").execute()
+                total = len(all_resp.data)
+                used = sum(1 for r in all_resp.data if r["used"])
+                unused = total - used
 
-            print(f"\n{'='*50}")
-            print(f"Tracker Stats:")
-            print(f"{'='*50}")
-            print(f"Total usernames: {total}")
-            print(f"Followed: {used}")
-            print(f"Unused: {unused}")
-            print(f"{'='*50}\n")
+                print(f"\n{'='*50}")
+                print(f"Tracker Stats:")
+                print(f"{'='*50}")
+                print(f"Total usernames: {total}")
+                print(f"Followed: {used}")
+                print(f"Unused: {unused}")
+                print(f"{'='*50}\n")
 
-            return {'total': total, 'used': used, 'unused': unused}
+                return {'total': total, 'used': used, 'unused': unused}
+            except Exception as e:
+                print(f"❌ Error getting status: {e}")
+                return {'total': 0, 'used': 0, 'unused': 0}
 
     def add_username(self, username):
         """Add a new username to tracker (skip if exists)"""
-        usernames = self.load_usernames()
-
-        if username in usernames:
+        if self.exists(username):
             return False  # Already exists, skip silently
 
-        usernames[username] = {"used": False, "followed_by": "", "followed_at": ""}
-        return self._save_all(usernames)
+        try:
+            supabase.table(TABLE).insert({
+                "username": username,
+                "used": False,
+                "followed_by": "",
+                "followed_at": None,
+            }).execute()
+            return True
+        except Exception as e:
+            print(f"❌ Error adding username: {e}")
+            return False
 
     def add_usernames_bulk(self, username_list):
         """Add multiple usernames, skipping duplicates. Returns count of new adds."""
-        usernames = self.load_usernames()
-        new_count = 0
-        for uname in username_list:
-            if uname not in usernames:
-                usernames[uname] = {"used": False, "followed_by": "", "followed_at": ""}
-                new_count += 1
-        if new_count > 0:
-            self._save_all(usernames)
-        return new_count
+        if not username_list:
+            return 0
+
+        try:
+            # Get existing usernames in one query
+            existing_resp = (supabase.table(TABLE)
+                             .select("username")
+                             .in_("username", list(username_list))
+                             .execute())
+            existing = {r["username"] for r in existing_resp.data}
+
+            new_rows = []
+            for uname in username_list:
+                if uname not in existing:
+                    new_rows.append({
+                        "username": uname,
+                        "used": False,
+                        "followed_by": "",
+                        "followed_at": None,
+                    })
+
+            if new_rows:
+                supabase.table(TABLE).insert(new_rows).execute()
+            return len(new_rows)
+        except Exception as e:
+            print(f"❌ Error bulk adding usernames: {e}")
+            return 0
 
     def remove_username(self, username):
         """Remove a username from tracker"""
-        usernames = self.load_usernames()
-
-        if username not in usernames:
+        if not self.exists(username):
             print(f"⚠️ Username '{username}' not found!")
             return False
 
-        del usernames[username]
-        if self._save_all(usernames):
+        try:
+            supabase.table(TABLE).delete().eq("username", username).execute()
             print(f"✓ Removed '{username}' from tracker")
             return True
-        return False
+        except Exception as e:
+            print(f"❌ Error removing username: {e}")
+            return False
 
 
 if __name__ == "__main__":
