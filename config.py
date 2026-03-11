@@ -47,9 +47,6 @@ GMAIL_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "gmail_credentials.json")
 PROXIES_FILE = os.path.join(PROJECT_ROOT, "proxies.json")
 ACCOUNTS_PER_PROXY = 1
 
-# --- DAILY FOLLOW CONFIGURATION ---
-DAILY_FOLLOWS_PER_ACCOUNT = 5
-
 # --- SESSION / LOG / DATA DIRS ---
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")

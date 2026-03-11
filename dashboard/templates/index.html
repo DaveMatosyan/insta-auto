@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Follow Ramp Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f13;
+            color: #e4e4e7;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* ── Header ──────────────────────────── */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #27272a;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a78bfa, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .refresh-info {
+            font-size: 13px;
+            color: #71717a;
+        }
+
+        .header .refresh-info .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            margin-right: 6px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* ── Stat Cards ──────────────────────── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        .stat-card {
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 12px;
+            padding: 20px;
+            transition: border-color 0.2s;
+        }
+
+        .stat-card:hover {
+            border-color: #3f3f46;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #71717a;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fafafa;
+        }
+
+        .stat-card .value.purple { color: #a78bfa; }
+        .stat-card .value.green  { color: #4ade80; }
+        .stat-card .value.blue   { color: #60a5fa; }
+        .stat-card .value.amber  { color: #fbbf24; }
+
+        /* ── Accounts Table ──────────────────── */
+        .section {
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 28px;
+        }
+
+        .section-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #27272a;
+            font-size: 15px;
+            font-weight: 600;
+            color: #a1a1aa;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #71717a;
+            border-bottom: 1px solid #27272a;
+        }
+
+        td {
+            padding: 14px 16px;
+            font-size: 14px;
+            border-bottom: 1px solid #1e1e22;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: #1c1c20;
+        }
+
+        .username {
+            font-weight: 600;
+            color: #e4e4e7;
+        }
+
+        /* Phase badges */
+        .phase-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .phase-1 { background: #1e293b; color: #93c5fd; }
+        .phase-2 { background: #1a2e1a; color: #86efac; }
+        .phase-3 { background: #2a2517; color: #fde68a; }
+        .phase-4 { background: #2a1f17; color: #fdba74; }
+        .phase-5 { background: #2a1720; color: #fca5a5; }
+
+        /* Progress bars */
+        .progress-container {
+            width: 100%;
+            max-width: 160px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: #27272a;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #818cf8, #a78bfa);
+            transition: width 0.6s ease;
+        }
+
+        .progress-text {
+            font-size: 11px;
+            color: #71717a;
+            margin-top: 4px;
+        }
+
+        /* ── Activity Feed ────────────────────── */
+        .activity-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            border-bottom: 1px solid #1e1e22;
+            font-size: 13px;
+        }
+
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+
+        .activity-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #312e81, #4c1d95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .activity-text {
+            flex: 1;
+        }
+
+        .activity-text .actor {
+            font-weight: 600;
+            color: #a78bfa;
+        }
+
+        .activity-text .target {
+            color: #60a5fa;
+        }
+
+        .activity-time {
+            font-size: 12px;
+            color: #52525b;
+            flex-shrink: 0;
+        }
+
+        /* ── Responsive ──────────────────────── */
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .container {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📊 Follow Ramp Dashboard</h1>
+            <div class="refresh-info">
+                <span class="dot"></span>
+                Auto-refresh every 30s
+            </div>
+        </div>
+
+        <!-- Stat Cards -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="label">Active Accounts</div>
+                <div class="value purple" id="stat-accounts">{{ accounts|length }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Lifetime Follows</div>
+                <div class="value green" id="stat-total">{{ accounts|map(attribute='total_follows')|sum }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Followed Today</div>
+                <div class="value blue" id="stat-today">{{ accounts|map(attribute='daily_follows_today')|sum }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Remaining Today</div>
+                <div class="value amber" id="stat-remaining">{{ accounts|map(attribute='remaining')|sum }}</div>
+            </div>
+        </div>
+
+        <!-- Accounts Table -->
+        <div class="section">
+            <div class="section-header">Account Ramp Progress</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Account</th>
+                        <th>Phase</th>
+                        <th>Daily Limit</th>
+                        <th>Today</th>
+                        <th>Remaining</th>
+                        <th>Phase Progress</th>
+                        <th>Lifetime</th>
+                        <th>Last Run</th>
+                    </tr>
+                </thead>
+                <tbody id="accounts-tbody">
+                    {% for a in accounts %}
+                    <tr>
+                        <td class="username">@{{ a.username }}</td>
+                        <td><span class="phase-badge phase-{{ a.phase }}">Phase {{ a.phase }}</span></td>
+                        <td>{{ a.daily_limit }}/day</td>
+                        <td>{{ a.daily_follows_today }}</td>
+                        <td>{{ a.remaining }}</td>
+                        <td>
+                            <div class="progress-container">
+                                <div class="progress-bar">
+                                    {% if a.phase_info.phase_size %}
+                                    <div class="progress-fill" style="width: {{ (a.phase_info.progress_in_phase / a.phase_info.phase_size * 100)|round }}%"></div>
+                                    {% else %}
+                                    <div class="progress-fill" style="width: 100%"></div>
+                                    {% endif %}
+                                </div>
+                                <div class="progress-text">
+                                    {% if a.phase_info.phase_size %}
+                                        {{ a.phase_info.progress_in_phase }}/{{ a.phase_info.phase_size }}
+                                    {% else %}
+                                        {{ a.phase_info.progress_in_phase }} (ongoing)
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td>{{ a.total_follows }}</td>
+                        <td>{{ a.last_follow_date or 'never' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Activity Feed -->
+        <div class="section">
+            <div class="section-header">Recent Activity</div>
+            <div id="activity-feed">
+                <div class="activity-item" style="color: #52525b; padding: 24px 20px; text-align: center;">
+                    Loading activity...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ── Auto-refresh ──────────────────────
+        function formatTime(isoStr) {
+            const d = new Date(isoStr);
+            const now = new Date();
+            const diffMs = now - d;
+            const diffMin = Math.floor(diffMs / 60000);
+
+            if (diffMin < 1) return 'just now';
+            if (diffMin < 60) return diffMin + 'm ago';
+            const diffHr = Math.floor(diffMin / 60);
+            if (diffHr < 24) return diffHr + 'h ago';
+            return d.toLocaleDateString();
+        }
+
+        async function refreshStats() {
+            try {
+                const resp = await fetch('/api/stats');
+                const data = await resp.json();
+                document.getElementById('stat-accounts').textContent = data.total_accounts;
+                document.getElementById('stat-total').textContent = data.total_follows;
+                document.getElementById('stat-today').textContent = data.total_today;
+                document.getElementById('stat-remaining').textContent = data.total_remaining;
+            } catch (e) {
+                console.error('Failed to refresh stats:', e);
+            }
+        }
+
+        async function refreshActivity() {
+            try {
+                const resp = await fetch('/api/activity');
+                const data = await resp.json();
+                const feed = document.getElementById('activity-feed');
+
+                if (!data.length) {
+                    feed.innerHTML = '<div class="activity-item" style="color: #52525b; padding: 24px 20px; text-align: center;">No follow activity yet</div>';
+                    return;
+                }
+
+                feed.innerHTML = data.map(item => `
+                    <div class="activity-item">
+                        <div class="activity-icon">👤</div>
+                        <div class="activity-text">
+                            <span class="actor">@${item.account_username}</span>
+                            followed
+                            <span class="target">@${item.target_username}</span>
+                        </div>
+                        <div class="activity-time">${formatTime(item.followed_at)}</div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to refresh activity:', e);
+            }
+        }
+
+        async function refreshAccounts() {
+            try {
+                const resp = await fetch('/api/accounts');
+                const accounts = await resp.json();
+                const tbody = document.getElementById('accounts-tbody');
+
+                tbody.innerHTML = accounts.map(a => {
+                    const pi = a.phase_info;
+                    const progressPct = pi.phase_size
+                        ? Math.round((pi.progress_in_phase / pi.phase_size) * 100)
+                        : 100;
+                    const progressText = pi.phase_size
+                        ? `${pi.progress_in_phase}/${pi.phase_size}`
+                        : `${pi.progress_in_phase} (ongoing)`;
+
+                    return `
+                        <tr>
+                            <td class="username">@${a.username}</td>
+                            <td><span class="phase-badge phase-${a.phase}">Phase ${a.phase}</span></td>
+                            <td>${a.daily_limit}/day</td>
+                            <td>${a.daily_follows_today}</td>
+                            <td>${a.remaining}</td>
+                            <td>
+                                <div class="progress-container">
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" style="width: ${progressPct}%"></div>
+                                    </div>
+                                    <div class="progress-text">${progressText}</div>
+                                </div>
+                            </td>
+                            <td>${a.total_follows}</td>
+                            <td>${a.last_follow_date || 'never'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('Failed to refresh accounts:', e);
+            }
+        }
+
+        // Initial load
+        refreshActivity();
+
+        // Refresh every 30 seconds
+        setInterval(() => {
+            refreshStats();
+            refreshAccounts();
+            refreshActivity();
+        }, 30000);
+    </script>
+</body>
+</html>
