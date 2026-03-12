@@ -1074,8 +1074,8 @@ def create_account(email_number, proxy_url=None):
         print(f"Proxy: {proxy_url[:50]}...")
 
     password = "Pass" + generate_random_string(8) + "!"
-    fullname = "Aria Sky"
-    username = "aria_sky_" + generate_random_string(5)
+    fullname = "Aiko Ren"
+    username = "aiko_ren_" + generate_random_string(5)
 
     print(f"\n{'='*60}")
     print(f"Creating account #{email_number}")

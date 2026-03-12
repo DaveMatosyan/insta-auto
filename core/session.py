@@ -181,7 +181,7 @@ def do_login(page, username, password):
         page.locator('input[name="password"]').fill(password)
         time.sleep(random.uniform(0.5, 1.5))
 
-        page.locator('button[type="submit"]').click()
+        page.locator('div[role="button"][aria-label="Log in"]').click()
         time.sleep(random.uniform(5, 8))
 
         try:

@@ -64,7 +64,22 @@ TARGET_CREATORS = [
     # "soyneiva",             # ~5M -- scraped, 370 raw
     # "mathildtantot",        # ~10M -- scraped, 413 raw
     # "anacheri",             # ~500K -- scraped, 352 raw
-    # --- Add new creators below ---
+    # --- Batch 2 — new creators ---
+    "laurenwolfe",              # ~2M -- fitness/glamour
+    "valentinanappi",           # ~8M -- adult model, huge male audience
+    "demirose",                 # ~20M -- glamour model, bikini
+    "niaborealiss",             # ~4M -- Brazilian model
+    "lfrancescasofia",          # ~3M -- Italian model/influencer
+    "amberhayes_",              # ~1M -- fitness/OF model
+    "yanet_garcia",             # ~16M -- fitness/lifestyle
+    "galfrancescaa",            # ~2M -- Italian glamour
+    "polina_malinovskaya",      # ~6M -- Russian model
+    "sveta_bilyalova",          # ~7M -- Russian glamour model
+    "lindaperea_",              # ~3M -- Colombian model
+    "kyliejenner",              # ~400M -- massive audience, lots of male commenters
+    "iamhalsey",                # ~30M -- music/lifestyle
+    "mikirai_",                 # ~2M -- Japanese model
+    "sophiet",                  # ~10M -- actress, male-heavy
 ]
 SCRAPER_MAX_POSTS = 12         # Posts to scrape per creator (more posts = more commenters)
 SCRAPER_SCORE_PROFILES = True  # Visit each commenter profile to score quality
