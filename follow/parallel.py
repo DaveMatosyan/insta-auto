@@ -106,7 +106,7 @@ def run_parallel_follows(num_accounts=2, dry_run=False):
     reset_daily_counts()
 
     # Get account credentials from JSON
-    all_accounts = get_all_accounts()
+    all_accounts = [a for a in get_all_accounts() if a.get("role") != "scraper"]
 
     # Get ramp info from Supabase
     active_ramp = get_all_active_accounts()

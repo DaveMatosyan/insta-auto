@@ -86,7 +86,7 @@ def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
     reset_daily_counts()
 
     # Get account credentials from JSON
-    accounts = get_all_accounts()
+    accounts = [a for a in get_all_accounts() if a.get("role") != "scraper"]
     if max_accounts:
         accounts = accounts[:max_accounts]
 

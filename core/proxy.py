@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 import requests
 
-from config import JSON_FILE, PROJECT_ROOT
+from config import PROJECT_ROOT
 
 
 # --- ProxyShare configuration ---

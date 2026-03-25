@@ -9,7 +9,6 @@ from config import (
     EMAIL_DOMAIN,
     START_NUMBER,
     NUM_ACCOUNTS,
-    JSON_FILE,
     POST_CAPTION,
     IMAGES_DIR,
 )
@@ -25,7 +24,7 @@ def main():
     print(f"Base email: {BASE_EMAIL_PREFIX}+XXX{EMAIL_DOMAIN}")
     print(f"Starting number: {START_NUMBER}")
     print(f"Number of accounts to create: {NUM_ACCOUNTS}")
-    print(f"Accounts will be saved to: {JSON_FILE}")
+    print(f"Accounts will be saved to: Supabase")
     print(f"Images folder: {IMAGES_DIR} (random selection)")
     print(f"Post caption: {POST_CAPTION}")
     print("="*60 + "\n")
@@ -71,7 +70,7 @@ def main():
     print(f"Total accounts attempted: {NUM_ACCOUNTS}")
     print(f"Successful: {successful}")
     print(f"Failed: {failed}")
-    print(f"All account info saved to: {JSON_FILE}")
+    print(f"All account info saved to Supabase")
     print("="*60 + "\n")
 
 

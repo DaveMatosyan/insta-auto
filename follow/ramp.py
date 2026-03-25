@@ -9,11 +9,9 @@ Ramp schedule (per account):
     Phase 5: 700+       total follows → 50/day
 """
 
-import json
 from datetime import date, datetime, timezone
 
 from db.supabase_client import supabase
-from config import JSON_FILE
 
 # ── Ramp schedule ──────────────────────────────────────────────
 # Each tuple: (min_total_follows, daily_limit)
@@ -201,44 +199,3 @@ def record_follow(account_username: str, target_username: str):
     }).eq("username", account_username).execute()
 
 
-# ── Account sync ──────────────────────────────────────────────
-
-def sync_accounts_from_json():
-    """
-    Read instagram_accounts.json and upsert into the accounts table.
-    Used for initial migration and when new accounts are added.
-    Only adds new accounts — does not overwrite existing follow stats.
-    """
-    with open(JSON_FILE, "r") as f:
-        accounts_json = json.load(f)
-
-    for account in accounts_json:
-        username = account.get("username")
-        email = account.get("email", "")
-
-        if not username:
-            continue
-
-        # Check if already exists
-        resp = supabase.table("accounts") \
-            .select("username") \
-            .eq("username", username) \
-            .execute()
-
-        if resp.data:
-            # Already exists, skip (don't overwrite stats)
-            continue
-
-        # Insert new account
-        supabase.table("accounts").insert({
-            "username": username,
-            "email": email,
-            "status": "active",
-            "total_follows": 0,
-            "daily_follows_today": 0,
-            "notes": "",
-        }).execute()
-
-        print(f"[ramp] Added new account @{username}")
-
-    print("[ramp] Account sync complete")

@@ -28,7 +28,6 @@ from follow.ramp import (
     reset_daily_counts,
     get_all_active_accounts,
     get_phase_info,
-    sync_accounts_from_json,
 )
 from follow.parallel import run_parallel_follows
 
@@ -96,9 +95,8 @@ def run_scheduler(run_time="09:00", dry_run=False, run_now=False):
     logging.info(f"Log file: {log_file}")
     logging.info(f"Dry run: {dry_run}")
 
-    # Sync accounts from JSON on startup
-    logging.info("Syncing accounts from JSON...")
-    sync_accounts_from_json()
+    # Accounts are now stored directly in Supabase
+    logging.info("Accounts loaded from Supabase")
 
     while True:
         if run_now:

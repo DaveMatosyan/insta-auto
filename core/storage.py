@@ -1,74 +1,99 @@
 """
-Account storage — JSON file operations for Instagram accounts.
+Account storage — Supabase-backed operations for Instagram accounts.
 """
 
 import json
-import os
+from db.supabase_client import supabase
 
-from config import JSON_FILE
+
+def _row_to_account(row):
+    """Convert a Supabase row to the account dict format used everywhere."""
+    acc = {
+        "username": row["username"],
+        "email": row.get("email", ""),
+        "password": row.get("password", ""),
+        "role": row.get("role", "follow"),
+    }
+    fp = row.get("fingerprint")
+    if fp:
+        acc["fingerprint"] = fp if isinstance(fp, dict) else json.loads(fp)
+    if row.get("proxy_url"):
+        acc["proxy_url"] = row["proxy_url"]
+    return acc
 
 
 def load_accounts():
-    """Load existing accounts from JSON file."""
-    if os.path.exists(JSON_FILE):
-        try:
-            with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if content:
-                    return json.loads(content)
-        except json.JSONDecodeError:
-            print(f"Warning: {JSON_FILE} is corrupted, starting fresh")
-    return []
+    """Load all accounts from Supabase."""
+    try:
+        resp = supabase.table("accounts").select("*").execute()
+        return [_row_to_account(r) for r in resp.data]
+    except Exception as e:
+        print(f"Error loading accounts from Supabase: {e}")
+        return []
 
 
-def save_account(email, username, password, fingerprint=None, proxy_url=None):
-    """Save account credentials, fingerprint, and proxy to JSON file."""
-    accounts = load_accounts()
-    account_data = {
+def save_account(email, username, password, fingerprint=None, proxy_url=None, role="follow"):
+    """Save a new account to Supabase."""
+    row = {
         "email": email,
         "username": username,
-        "password": password
+        "password": password,
+        "role": role,
+        "status": "active",
+        "total_follows": 0,
+        "daily_follows_today": 0,
     }
     if fingerprint:
-        account_data["fingerprint"] = fingerprint
+        row["fingerprint"] = fingerprint
     if proxy_url:
-        account_data["proxy_url"] = proxy_url
+        row["proxy_url"] = proxy_url
 
-    accounts.append(account_data)
-    _save_all(accounts)
-    print(f"Saved account to {JSON_FILE}")
-
-
-def _save_all(accounts):
-    """Write full accounts list to JSON."""
-    with open(JSON_FILE, 'w', encoding='utf-8') as f:
-        json.dump(accounts, f, indent=2, ensure_ascii=False)
+    try:
+        supabase.table("accounts").insert(row).execute()
+        print(f"Saved account @{username} to Supabase")
+    except Exception as e:
+        print(f"Error saving account @{username}: {e}")
 
 
 def update_account(username, **fields):
     """Update any fields on an existing account."""
-    accounts = load_accounts()
-    for account in accounts:
-        if account.get("username") == username:
-            account.update(fields)
-            _save_all(accounts)
+    try:
+        resp = supabase.table("accounts").update(fields).eq("username", username).execute()
+        if resp.data:
             print(f"Updated account '{username}': {list(fields.keys())}")
             return True
-    print(f"Account '{username}' not found")
-    return False
+        print(f"Account '{username}' not found")
+        return False
+    except Exception as e:
+        print(f"Error updating account '{username}': {e}")
+        return False
 
 
-def get_all_accounts():
-    """Return full list of all accounts."""
-    return load_accounts()
+def get_all_accounts(role=None):
+    """Return accounts, optionally filtered by role."""
+    try:
+        query = supabase.table("accounts").select("*")
+        if role:
+            query = query.eq("role", role)
+        resp = query.execute()
+        accounts = [_row_to_account(r) for r in resp.data]
+        if role and not accounts:
+            print(f"Warning: no accounts with role='{role}', returning all accounts")
+            return load_accounts()
+        return accounts
+    except Exception as e:
+        print(f"Error fetching accounts: {e}")
+        return []
 
 
 def get_account_by_username(username):
     """Get account data by username."""
-    accounts = load_accounts()
-    for account in accounts:
-        if account.get("username") == username:
-            return account
+    try:
+        resp = supabase.table("accounts").select("*").eq("username", username).limit(1).execute()
+        if resp.data:
+            return _row_to_account(resp.data[0])
+    except Exception as e:
+        print(f"Error fetching account @{username}: {e}")
     return None
 
 
@@ -82,4 +107,9 @@ def get_fingerprint_by_username(username):
 
 def get_account_count():
     """Get the number of saved accounts."""
-    return len(load_accounts())
+    try:
+        resp = supabase.table("accounts").select("username").execute()
+        return len(resp.data)
+    except Exception as e:
+        print(f"Error counting accounts: {e}")
+        return 0

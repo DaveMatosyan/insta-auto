@@ -38,12 +38,12 @@ def run_scrape_only(creators=None, max_posts=None, count=50,
     if min_score is None:
         min_score = SCRAPER_MIN_SCORE
 
-    accounts = get_all_accounts()
+    accounts = get_all_accounts(role="scraper")
     if not accounts:
         print("No accounts available!")
         return
 
-    account = pick_best_account(accounts)
+    account = pick_best_account(accounts, role="scraper")
 
     try:
         gemini_model = init_gemini()
@@ -338,12 +338,12 @@ def run_score_file(score_file, min_score=None, headless=True, no_proxy=False):
         print(f"Could not initialize Gemini: {e}")
         return
 
-    accounts = get_all_accounts()
+    accounts = get_all_accounts(role="scraper")
     if not accounts:
         print("No accounts available!")
         return
 
-    account = pick_best_account(accounts)
+    account = pick_best_account(accounts, role="scraper")
     print(f"Using account @{account['username']}")
 
     session = open_session(account, headless=headless, block_images=False, no_proxy=no_proxy)

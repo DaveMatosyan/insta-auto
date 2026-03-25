@@ -145,7 +145,7 @@ def needs_login(page):
     """Check if page shows the login form (cookies expired or not set)."""
     try:
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
-        time.sleep(4)
+        time.sleep(5)
 
         login_input = page.locator('input[name="username"]')
         if login_input.is_visible(timeout=2000):
@@ -163,6 +163,16 @@ def needs_login(page):
             return True
 
         if "Log in" in body_text[:200] and "Search" not in body_text[:500]:
+            return True
+
+        # Mobile view: "Sign up" or "Open app" means not logged in
+        if "Sign up" in body_text[:300] or "Open app" in body_text[:300]:
+            return True
+
+        # No logged-in indicators = not logged in
+        logged_in = ["Search", "Home", "Explore", "Reels", "Messages"]
+        if not any(ind in body_text[:500] for ind in logged_in):
+            print("No logged-in indicators found, treating as not logged in")
             return True
 
         return False

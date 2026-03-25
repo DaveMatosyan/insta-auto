@@ -360,41 +360,35 @@ def _step_birthday(page):
         year = random.randint(1997, 2000)
         month = random.randint(1, 12)
         day = random.randint(1, 28)
-        random_birthday = f"{year:04d}-{month:02d}-{day:02d}"
 
-        print(f"Setting random birthday: {random_birthday}")
+        # Instagram uses a plain text input with MM/DD/YYYY format
+        birthday_str = f"{month:02d}/{day:02d}/{year:04d}"
+        print(f"Setting random birthday: {birthday_str}")
 
-        birthday_input = page.locator('input[type="date"]').first
+        # Try the text input first (current Instagram signup flow)
+        birthday_input = page.locator('input[name="birthday"], input[aria-label*="Birthday"], input[aria-label*="birthday"]').first
+        if not birthday_input.is_visible(timeout=3000):
+            # Fallback: any text input on the page that's not already filled
+            birthday_input = page.locator('input[type="text"]').first
 
         if birthday_input.is_visible(timeout=ELEMENT_TIMEOUT):
-            birthday_input.fill(random_birthday)
+            birthday_input.click()
+            human_delay(0.5, 1)
+            # Clear existing value and type the birthday
+            birthday_input.fill("")
+            human_delay(0.3, 0.5)
+            birthday_input.type(birthday_str, delay=80)
             human_delay(1, 2)
-            print(f"Birthday set to: {random_birthday}")
+            print(f"Birthday set to: {birthday_str}")
         else:
-            print("Date input field not visible, trying alternative method...")
-            try:
-                month_input = page.locator('input[placeholder*="Month"], input[aria-label*="month"]').first
-                day_input = page.locator('input[placeholder*="Day"], input[aria-label*="day"]').first
-                year_input = page.locator('input[placeholder*="Year"], input[aria-label*="year"]').first
-
-                if month_input.is_visible():
-                    month_input.fill(str(month))
-                    human_delay(1, 2)
-                if day_input.is_visible():
-                    day_input.fill(str(day))
-                    human_delay(1, 2)
-                if year_input.is_visible():
-                    year_input.fill(str(year))
-                    human_delay(1, 2)
-            except Exception as e:
-                print(f"Could not fill individual birthday fields: {e}")
-                try:
-                    page.evaluate(f"""
-                        document.querySelector('input[type="date"]').value = '{random_birthday}';
-                        document.querySelector('input[type="date"]').dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    """)
-                except:
-                    print("Could not set birthday")
+            # Fallback: try input[type="date"] format
+            print("Text input not found, trying date input...")
+            date_input = page.locator('input[type="date"]').first
+            if date_input.is_visible(timeout=3000):
+                date_input.fill(f"{year:04d}-{month:02d}-{day:02d}")
+                human_delay(1, 2)
+            else:
+                print("Could not find any birthday input field")
 
         human_delay(1, 2)
         print("Clicking Next...")

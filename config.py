@@ -28,10 +28,10 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 # --- EMAIL CONFIGURATION ---
-BASE_EMAIL_PREFIX = "test308test11"  # Will become gagikzugaran+100@gmail.com, gagikzugaran+101@gmail.com, etc.
+BASE_EMAIL_PREFIX = "redditakk4"  # Will become redditakk4+1100@gmail.com, redditakk4+1101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 32  # Starting number for email suffix
-NUM_ACCOUNTS = 1   # Number of accounts to create
+START_NUMBER = 1120  # Starting number for email suffix
+NUM_ACCOUNTS = 9   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
 # Choose between Gmail API (recommended - no CAPTCHA) or IMAP (requires App Password)
@@ -93,7 +93,7 @@ BLOCK_IMAGES = True  # Block image loading to minimize bandwidth (disabled durin
 STOP_SEC = 3  # Pause between actions
 
 # --- FILE CONFIGURATION ---
-JSON_FILE = os.path.join(PROJECT_ROOT, "instagram_accounts.json")
+# Accounts are now stored in Supabase (table: accounts)
 
 # --- PROFILE AND POST CONFIGURATION ---
 # Profile pic + post image are picked RANDOMLY from data/images/ folder (no hardcoded paths)

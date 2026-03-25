@@ -128,24 +128,28 @@ def parse_proxy_url(proxy_url):
     return proxy_dict
 
 
-def pick_best_account(accounts):
+def pick_best_account(accounts, role=None):
     """
-    Pick the best account for scraping — prefers accounts with large valid cookies
-    (most likely to be already logged in).
-
-    Extracted from 4 duplications across the codebase.
+    Pick the best account — prefers accounts with large valid cookies.
 
     Args:
         accounts: list of account dicts
+        role: optional role filter (e.g. "scraper", "follow")
 
     Returns:
-        dict: best account, or last account as fallback
+        dict: best account, or first matching as fallback
     """
-    for acc in reversed(accounts):
+    pool = accounts
+    if role:
+        filtered = [a for a in accounts if a.get("role") == role]
+        if filtered:
+            pool = filtered
+
+    for acc in reversed(pool):
         cookie_file = os.path.join(SESSIONS_DIR, f"{acc['username']}_state.json")
         if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 5000:
-            print(f"Using account @{acc['username']} (has valid cookies)")
+            print(f"Using account @{acc['username']} (role={acc.get('role','none')}, has cookies)")
             return acc
-    fallback = accounts[-1]
-    print(f"No account with valid cookies, trying @{fallback['username']}")
+    fallback = pool[0]
+    print(f"No account with valid cookies, using @{fallback['username']} (role={fallback.get('role','none')})")
     return fallback
