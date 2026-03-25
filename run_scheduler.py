@@ -57,22 +57,22 @@ def print_status():
         print("No active accounts found in Supabase.")
         return
 
-    print(f"\n{'='*75}")
+    print(f"\n{'='*80}")
     print(f"  RAMP STATUS — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print(f"{'='*75}")
-    print(f"  {'Username':<20} {'Phase':>5} {'Limit':>6} {'Today':>6} {'Left':>5} {'Total':>7} {'Last Run':<12}")
-    print(f"  {'-'*20} {'-'*5} {'-'*6} {'-'*6} {'-'*5} {'-'*7} {'-'*12}")
+    print(f"{'='*80}")
+    print(f"  {'Username':<20} {'Age':>4} {'Phase':>5} {'Limit':>6} {'Today':>6} {'Left':>5} {'Total':>7}")
+    print(f"  {'-'*20} {'-'*4} {'-'*5} {'-'*6} {'-'*6} {'-'*5} {'-'*7}")
 
     for a in accounts:
-        last = a["last_follow_date"] or "never"
-        print(f"  {a['username']:<20} {a['phase']:>5} {a['daily_limit']:>6} "
-              f"{a['daily_follows_today']:>6} {a['remaining']:>5} {a['total_follows']:>7} {str(last):<12}")
+        age = a.get("account_age_days", 0)
+        print(f"  {a['username']:<20} {age:>3}d {a['phase']:>5} {a['daily_limit']:>6} "
+              f"{a['daily_follows_today']:>6} {a['remaining']:>5} {a['total_follows']:>7}")
 
     total = sum(a["total_follows"] for a in accounts)
     remaining = sum(a["remaining"] for a in accounts)
-    print(f"  {'-'*20} {'-'*5} {'-'*6} {'-'*6} {'-'*5} {'-'*7} {'-'*12}")
-    print(f"  {'TOTALS':<20} {'':>5} {'':>6} {'':>6} {remaining:>5} {total:>7}")
-    print(f"{'='*75}\n")
+    print(f"  {'-'*20} {'-'*4} {'-'*5} {'-'*6} {'-'*6} {'-'*5} {'-'*7}")
+    print(f"  {'TOTALS':<20} {'':>4} {'':>5} {'':>6} {'':>6} {remaining:>5} {total:>7}")
+    print(f"{'='*80}\n")
 
 
 def seconds_until(target_hour, target_minute):
