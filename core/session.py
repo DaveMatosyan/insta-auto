@@ -145,16 +145,30 @@ def needs_login(page):
     """Check if page shows the login form (cookies expired or not set)."""
     try:
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
-        time.sleep(5)
+        time.sleep(3)
 
+        # Wait for JS to fully render (mobile landing page loads first, then real content)
+        page.wait_for_load_state("networkidle", timeout=10000)
+        time.sleep(3)
+
+        # If redirected to login page
+        if "/accounts/login" in page.url:
+            return True
+
+        # Check for actual login form (username input)
         login_input = page.locator('input[name="username"]')
         if login_input.is_visible(timeout=2000):
             return True
 
         body_text = page.evaluate("document.body.innerText")
-        if "/accounts/login" in page.url:
-            return True
 
+        # Logged-in indicators — if ANY found, we're logged in
+        logged_in = ["Search", "Home", "Explore", "Reels", "Messages", "Notifications", "Profile", "Create"]
+        if any(ind in body_text[:1000] for ind in logged_in):
+            return False
+
+        # Mobile landing page detection: if we see "Log in" AND "Sign up" as buttons,
+        # this is the unauthenticated landing page
         login_link = page.evaluate("""() => {
             const a = document.querySelector('a[href*="/accounts/login"]');
             return a ? a.textContent.trim() : null;
@@ -162,21 +176,11 @@ def needs_login(page):
         if login_link and "log in" in login_link.lower():
             return True
 
-        if "Log in" in body_text[:200] and "Search" not in body_text[:500]:
-            return True
-
-        # Mobile view: "Sign up" or "Open app" means not logged in
-        if "Sign up" in body_text[:300] or "Open app" in body_text[:300]:
-            return True
-
-        # No logged-in indicators = not logged in
-        logged_in = ["Search", "Home", "Explore", "Reels", "Messages"]
-        if not any(ind in body_text[:500] for ind in logged_in):
-            print("No logged-in indicators found, treating as not logged in")
-            return True
-
-        return False
-    except:
+        # Last resort: no logged-in indicators at all
+        print("No logged-in indicators found, treating as not logged in")
+        return True
+    except Exception as e:
+        print(f"needs_login check error: {e}")
         return True
 
 
@@ -186,29 +190,74 @@ def do_login(page, username, password):
         page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded", timeout=15000)
         time.sleep(3)
 
+        # Wait for login form to appear
+        page.locator('input[name="username"]').wait_for(state="visible", timeout=10000)
+
         page.locator('input[name="username"]').fill(username)
         time.sleep(random.uniform(0.5, 1.5))
         page.locator('input[name="password"]').fill(password)
         time.sleep(random.uniform(0.5, 1.5))
 
-        page.locator('div[role="button"][aria-label="Log in"]').click()
-        time.sleep(random.uniform(5, 8))
+        # Try multiple login button selectors
+        login_clicked = False
+        for selector in [
+            'div[role="button"][aria-label="Log in"]',
+            'button[type="submit"]',
+            'button:has-text("Log in")',
+            'div[role="button"]:has-text("Log in")',
+        ]:
+            try:
+                btn = page.locator(selector).first
+                if btn.is_visible(timeout=1000):
+                    btn.click()
+                    login_clicked = True
+                    break
+            except:
+                continue
 
+        if not login_clicked:
+            print(f"Could not find login button for @{username}")
+            return False
+
+        # Wait for navigation after login (page context may be destroyed briefly)
         try:
-            not_now = page.locator('button:has-text("Not Now")').first
-            if not_now.is_visible(timeout=3000):
-                not_now.click()
-                time.sleep(2)
+            page.wait_for_load_state("networkidle", timeout=15000)
         except:
             pass
+        time.sleep(5)
 
-        if "/accounts/login" not in page.url:
+        # Dismiss any popups (save login info, notifications)
+        for _ in range(3):
+            try:
+                not_now = page.locator('button:has-text("Not Now")').first
+                if not_now.is_visible(timeout=2000):
+                    not_now.click()
+                    time.sleep(2)
+            except:
+                break
+
+        # Check if login succeeded
+        current_url = page.url
+        if "/accounts/login" in current_url:
+            print(f"Login failed for @{username} (still on login page)")
+            return False
+        elif "/challenge" in current_url:
+            print(f"Login for @{username} requires challenge verification!")
+            return False
+        else:
             print(f"Logged in as @{username}")
             return True
-        else:
-            print(f"Login failed for @{username}")
-            return False
+
     except Exception as e:
+        # Navigation errors during redirect are expected — check if we ended up logged in
+        try:
+            time.sleep(3)
+            current_url = page.url
+            if "/accounts/login" not in current_url and "/challenge" not in current_url:
+                print(f"Logged in as @{username} (after redirect)")
+                return True
+        except:
+            pass
         print(f"Login error for @{username}: {e}")
         return False
 

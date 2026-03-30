@@ -462,6 +462,73 @@ def _step_accept_terms(page):
 # Post-signup helpers
 # ---------------------------------------------------------------------------
 
+def _api_handoff(username, password, email, proxy_url):
+    """
+    Register the instagrapi Android device right after account creation.
+    Sets bio, uploads posts, saves API session.
+    Non-fatal — if this fails, the account is still saved.
+    """
+    try:
+        from core.api_client import create_api_client, save_api_session
+        from core.storage import update_account
+        from profile.setup import BIO_TEMPLATES, POST_CAPTIONS, get_profile_images
+        from config import FANVUE_LINK
+
+        print("\n--- API Handoff: Registering Android device ---")
+
+        account = {
+            "username": username,
+            "password": password,
+            "email": email,
+            "proxy_url": proxy_url,
+        }
+
+        cl = create_api_client(account)
+        if not cl:
+            print("[handoff] API login failed — will retry later via profile.runner")
+            return
+
+        # Set bio + linktree
+        bio = random.choice(BIO_TEMPLATES)
+        try:
+            cl.account_edit(biography=bio, external_url=FANVUE_LINK)
+            print(f"[handoff] Bio set: {bio[:50]}...")
+            print(f"[handoff] Website: {FANVUE_LINK}")
+        except Exception as e:
+            print(f"[handoff] Bio update failed: {e}")
+
+        # Upload posts
+        images = get_profile_images()
+        if images:
+            selected = random.sample(images, min(6, len(images)))
+            for i, img in enumerate(selected):
+                try:
+                    caption = random.choice(POST_CAPTIONS)
+                    cl.photo_upload(img, caption=caption)
+                    print(f"[handoff] Posted {i+1}/{len(selected)}: {os.path.basename(img)}")
+                except Exception as e:
+                    print(f"[handoff] Post {i+1} failed: {e}")
+                    break  # Stop on first failure (likely rate limit)
+                time.sleep(random.uniform(15, 30))
+
+            # Upload 1 story
+            try:
+                story_img = random.choice(images)
+                cl.photo_upload_to_story(story_img)
+                print(f"[handoff] Story uploaded")
+            except Exception as e:
+                print(f"[handoff] Story failed: {e}")
+        else:
+            print("[handoff] No images in data/profile_images/ — skipping posts")
+
+        save_api_session(cl, username)
+        update_account(username, api_session_saved=True)
+        print("[handoff] API handoff complete!")
+
+    except Exception as e:
+        print(f"[handoff] Error (non-fatal): {e}")
+
+
 def _save_session_and_bump_config(context, username, email, password, fullname,
                                    fingerprint, proxy_url):
     """Save account to JSON, save cookies, bump START_NUMBER in config."""
@@ -484,6 +551,9 @@ def _save_session_and_bump_config(context, username, email, password, fullname,
         print(f"Saved session cookies to {cookie_path}")
     except Exception as e:
         print(f"Could not save cookies: {e}")
+
+    # API handoff — register Android device + set bio + upload posts
+    _api_handoff(username, password, email, proxy_url)
 
     # Bump START_NUMBER in config.py
     try:

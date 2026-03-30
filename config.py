@@ -30,8 +30,8 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "redditakk4"  # Will become redditakk4+1100@gmail.com, redditakk4+1101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 1120  # Starting number for email suffix
-NUM_ACCOUNTS = 9   # Number of accounts to create
+START_NUMBER = 1000001  # Starting number for email suffix (7 digits to avoid matching 6-digit verification codes)
+NUM_ACCOUNTS = 1   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
 # Choose between Gmail API (recommended - no CAPTCHA) or IMAP (requires App Password)
@@ -98,3 +98,56 @@ STOP_SEC = 3  # Pause between actions
 # --- PROFILE AND POST CONFIGURATION ---
 # Profile pic + post image are picked RANDOMLY from data/images/ folder (no hardcoded paths)
 POST_CAPTION = "Check me outtt!"
+
+# --- DM AUTOMATION CONFIGURATION ---
+FANVUE_LINK = "https://link.me/aikorennn"  # Linktree deep link (in bio)
+
+# Persona
+DM_PERSONA_NAME = "Aiko Ren"
+DM_PERSONA_AGE = 21
+DM_PERSONA_LOCATION = "Los Angeles, CA"
+DM_PERSONA_STUDIES = "Psychology"
+
+# Conversation limits (7-stage system handles pitch timing automatically)
+DM_MAX_MESSAGES_BEFORE_DEAD = 50   # Kill engaged lead after 50 messages if no conversion
+DM_CONTEXT_SUMMARIZE_AFTER = 30    # Summarize old messages after 30 to save tokens
+
+# Follow-back timing
+DM_MIN_FOLLOWBACK_AGE_DAYS = 1     # Wait 1 day after follow before DMing
+DM_MAX_FOLLOWBACK_AGE_DAYS = 7     # Don't DM if followed > 7 days ago
+
+# Reply timing (seconds) — research: <1 min reply = 391% better conversion
+DM_REPLY_ENGAGED = (15, 45)        # 15-45 sec: interested/sexual replies (fastest)
+DM_REPLY_FAST = (30, 90)           # 30-90 sec: opening msgs, quick answers
+DM_REPLY_NORMAL = (60, 180)        # 1-3 min: mid-conversation
+DM_REPLY_SLOW = (180, 480)         # 3-8 min: playing cool after flirty msgs
+DM_REPLY_AFTER_PITCH = (600, 1800) # 10-30 min: after sending Fanvue pitch
+
+# Distraction pauses (replaces seen-zone mechanic)
+DM_DISTRACTION_PAUSE_CHANCE = 0.15   # 15% chance of 5-15 min "distraction" pause
+DM_DISTRACTION_PAUSE_SEC = (300, 900)  # 5-15 min pause range
+
+# Activity hours — no DMs outside this window (account local time)
+DM_ACTIVE_HOURS = (7, 23)  # 7am to 11pm
+
+# DM rate limiting (conservative weekly ramp — research: max 20 cold DMs/day)
+DM_RAMP_SCHEDULE = [
+    (0,  3),     # Week 1: 3 DMs/day (warming up)
+    (7,  5),     # Week 2: 5 DMs/day
+    (14, 10),    # Week 3: 10 DMs/day
+    (21, 15),    # Week 4: 15 DMs/day
+    (30, 20),    # Month 2+: 20 DMs/day (safe ceiling for cold DMs)
+]
+
+# Timing between DM threads
+DM_BETWEEN_THREADS_SEC = (60, 180)  # 1-3 min between different conversations
+
+# Follow-up sequence — research: 3 attempts max per cold target
+DM_MAX_COLD_ATTEMPTS = 3            # Max messages to unresponsive target before dead
+DM_FOLLOWUP_1_AFTER_HOURS = 48      # Send follow-up #1 after 48h no reply
+DM_FOLLOWUP_2_AFTER_HOURS = 24      # Send follow-up #2 after 24h no reply to #1
+
+# Re-engagement (for targets who went cold after initial engagement)
+DM_COLD_AFTER_HOURS = 48            # Mark as needing re-engagement after 48h silence
+DM_DEAD_AFTER_HOURS = 72            # Mark as dead after 72h no reply to re-engagement
+DM_REENGAGE_AFTER_DAYS = 14         # Try one more time after 2 weeks
