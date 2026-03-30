@@ -71,7 +71,45 @@ def build_gmail_service(creds):
     return build('gmail', 'v1', credentials=creds)
 
 
-def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3):
+def _extract_verification_code(text):
+    """
+    Extract Instagram 6-digit verification code from email text.
+    Avoids matching email address numbers (like +100000@gmail.com).
+
+    Strategy:
+    1. Look for code near context words (confirm, verify, code, use)
+    2. Exclude numbers that appear in email addresses
+    3. Prefer standalone 6-digit numbers not adjacent to @ or +
+    """
+    # Remove email addresses to avoid matching numbers in them
+    cleaned = re.sub(r'[\w.+-]+@[\w.-]+', '', text)
+
+    # Strategy 1: Look for code near context words
+    # Matches patterns like "code is 123456" or "123456 is your code" or "use 123456"
+    context_patterns = [
+        r'(?:code|confirm|verify|enter|use|is)\s*(?::|is)?\s*(\d{6})\b',
+        r'\b(\d{6})\s*(?:is your|as your|to confirm|to verify)',
+        r'>\s*(\d{6})\s*<',  # Code between HTML tags
+    ]
+
+    for pattern in context_patterns:
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    # Strategy 2: Find all 6-digit numbers in cleaned text, pick the first
+    # that doesn't look like part of an address/phone
+    all_codes = re.findall(r'\b(\d{6})\b', cleaned)
+    for code in all_codes:
+        # Skip if it looks like a year range or common non-code number
+        if code.startswith('20') and int(code) < 203000:
+            continue
+        return code
+
+    return None
+
+
+def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3, after_timestamp=None):
     """
     Retrieve Instagram verification code from Gmail using API.
 
@@ -79,6 +117,8 @@ def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3)
         service: Gmail API service
         max_retries (int): Maximum attempts to find the code
         retry_delay (int): Seconds between retries
+        after_timestamp (int|float): Unix timestamp — only fetch emails received after this time.
+                                     Pass int(time.time()) just before triggering login to avoid stale codes.
 
     Returns:
         str: The 6-digit verification code, or None if not found
@@ -89,11 +129,20 @@ def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3)
         print(f"\nFetching verification code from Gmail (API)...")
         print(f"Checking mailbox (max {max_retries} attempts)...\n")
 
+        # Build Gmail search query — filter to emails after timestamp if provided
+        base_q = 'from:(Instagram OR no-reply@mail.instagram.com) subject:(code OR verify OR confirmation)'
+        if after_timestamp:
+            # Gmail after: filter uses Unix epoch seconds
+            base_q += f' after:{int(after_timestamp)}'
+            import datetime
+            ts_str = datetime.datetime.fromtimestamp(after_timestamp).strftime('%H:%M:%S')
+            print(f"  (Only checking emails received after {ts_str})")
+
         for attempt in range(max_retries):
             try:
                 results = service.users().messages().list(
                     userId='me',
-                    q='from:(Instagram OR no-reply@mail.instagram.com) subject:(code OR verify OR confirmation)',
+                    q=base_q,
                     maxResults=5
                 ).execute()
 
@@ -108,26 +157,25 @@ def get_verification_code_from_gmail_api(service, max_retries=15, retry_delay=3)
                                 format='full'
                             ).execute()
 
+                            # Collect all text from the email
+                            email_text = ""
+
                             if 'parts' in message['payload']:
                                 for part in message['payload']['parts']:
                                     if part['mimeType'] in ('text/plain', 'text/html'):
                                         data = part['body'].get('data', '')
                                         if data:
-                                            text = base64.urlsafe_b64decode(data).decode('utf-8')
-                                            code_match = re.search(r'\b(\d{6})\b', text)
-                                            if code_match:
-                                                verification_code = code_match.group(1)
-                                                print(f"Found verification code: {verification_code}")
-                                                return verification_code
+                                            email_text += base64.urlsafe_b64decode(data).decode('utf-8') + "\n"
                             else:
                                 data = message['payload']['body'].get('data', '')
                                 if data:
-                                    text = base64.urlsafe_b64decode(data).decode('utf-8')
-                                    code_match = re.search(r'\b(\d{6})\b', text)
-                                    if code_match:
-                                        verification_code = code_match.group(1)
-                                        print(f"Found verification code: {verification_code}")
-                                        return verification_code
+                                    email_text = base64.urlsafe_b64decode(data).decode('utf-8')
+
+                            if email_text:
+                                code = _extract_verification_code(email_text)
+                                if code:
+                                    print(f"Found verification code: {code}")
+                                    return code
 
                         except Exception as e:
                             print(f"Error processing message: {e}")

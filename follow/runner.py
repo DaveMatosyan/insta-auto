@@ -37,16 +37,14 @@ def main():
     parser = argparse.ArgumentParser(description="Run daily Instagram follow automation")
     parser.add_argument("--accounts", type=int, default=None, help="Limit to first N accounts")
     parser.add_argument("--dry-run", action="store_true", help="Preview what would happen without acting")
-    parser.add_argument("--visible", action="store_true", help="Show browser window (default: headless)")
     args = parser.parse_args()
 
     log_file = setup_logging()
     logging.info(f"Log file: {log_file}")
     logging.info(f"Accounts: {'all' if args.accounts is None else args.accounts}")
     logging.info(f"Dry run: {args.dry_run}")
-    logging.info(f"Visible: {args.visible}")
 
-    summary = run_daily_follows(max_accounts=args.accounts, dry_run=args.dry_run, headless=not args.visible)
+    summary = run_daily_follows(max_accounts=args.accounts, dry_run=args.dry_run)
 
     logging.info(f"Done -- {summary['follows']} follows, {summary['errors']} errors")
 

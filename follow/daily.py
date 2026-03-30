@@ -1,15 +1,14 @@
 """
-Daily follow system — login via cookies, follow targets, track usage.
-Uses ramp-based daily limits instead of a flat number.
+Daily follow system — uses instagrapi API instead of browser automation.
+Uses ramp-based daily limits.
 """
 
 import random
 import time
-import os
 
 from config import PROJECT_ROOT
 from core.storage import get_all_accounts
-from core.session import open_session, close_session, ensure_logged_in
+from core.api_client import create_api_client, save_api_session
 from core.utils import human_delay
 from csv_management.username_manager import UsernameTracker
 from follow.ramp import (
@@ -21,50 +20,49 @@ from follow.ramp import (
 )
 
 
-def follow_targets(session, targets, account_username, count=None):
+def follow_targets(client, targets, account_username, count=None):
     """
-    Follow up to `count` target usernames.
+    Follow up to `count` target usernames via API.
 
     Args:
-        session: Session object from core.session
+        client: instagrapi Client (logged in)
         targets: list of usernames to follow
-        account_username: the account doing the following (for recording)
-        count: max follows (if None, follow all targets given)
+        account_username: the account doing the following
+        count: max follows (if None, follow all)
 
     Returns:
         list of successfully followed usernames
     """
-    page = session.page
     followed = []
     to_follow = targets[:count] if count else targets
 
     for target in to_follow:
         try:
             print(f"  -> Following @{target}...")
-            page.goto(f"https://www.instagram.com/{target}/", wait_until="domcontentloaded", timeout=15000)
-            human_delay(3, 5)
+            user_id = client.user_id_from_username(target)
+            client.user_follow(user_id)
+            print(f"     Followed @{target}")
+            followed.append(target)
 
-            follow_btn = page.locator('button:has-text("Follow")').first
-            if follow_btn.is_visible(timeout=3000):
-                btn_text = follow_btn.inner_text()
-                if btn_text.strip() in ("Following", "Requested"):
-                    print(f"     Already following/requested @{target}, skipping")
-                    continue
-                follow_btn.click()
-                human_delay(2, 4)
-                print(f"     Followed @{target}")
-                followed.append(target)
-
-                # Record in Supabase
-                try:
-                    record_follow(account_username, target)
-                except Exception as e:
-                    print(f"     Warning: failed to record follow in Supabase: {e}")
-            else:
-                print(f"     No Follow button for @{target} (private/nonexistent?)")
+            # Record in Supabase
+            try:
+                record_follow(account_username, target)
+            except Exception as e:
+                print(f"     Warning: failed to record follow: {e}")
 
         except Exception as e:
-            print(f"     Error following @{target}: {e}")
+            err = str(e).lower()
+            if "not found" in err or "user_not_found" in err:
+                print(f"     @{target} not found, skipping")
+            elif "challenge" in err:
+                print(f"     Challenge triggered! Stopping follows for @{account_username}")
+                break
+            elif "rate" in err or "limit" in err or "429" in err:
+                print(f"     Rate limited! Waiting 5 min then stopping...")
+                time.sleep(300)
+                break
+            else:
+                print(f"     Error following @{target}: {e}")
 
         if target != to_follow[-1]:
             wait = random.uniform(30, 90)
@@ -74,9 +72,9 @@ def follow_targets(session, targets, account_username, count=None):
     return followed
 
 
-def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
+def run_daily_follows(max_accounts=None, dry_run=False, **kwargs):
     """
-    Main entry point — run follows for all (or some) accounts.
+    Main entry point — run follows for all (or some) accounts via API.
     Uses ramp-based daily limits.
 
     Returns:
@@ -85,7 +83,7 @@ def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
     # Reset daily counts at the start of each run
     reset_daily_counts()
 
-    # Get account credentials from JSON
+    # Get account credentials
     accounts = [a for a in get_all_accounts() if a.get("role") != "scraper"]
     if max_accounts:
         accounts = accounts[:max_accounts]
@@ -102,7 +100,7 @@ def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
         return {"accounts": 0, "follows": 0, "errors": 0}
 
     print(f"\n{'='*60}")
-    print(f"DAILY FOLLOW RUN (RAMP-BASED)")
+    print(f"DAILY FOLLOW RUN (API-BASED, RAMP)")
     print(f"Accounts: {len(accounts)}")
     print(f"Targets available: {len(unused)}")
     print(f"Dry run: {dry_run}")
@@ -129,7 +127,7 @@ def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
 
         if not ramp:
             print(f"\n--- Account {i+1}/{len(accounts)}: @{username} ---")
-            print(f"    Not found in Supabase accounts table, skipping")
+            print(f"    Not found in Supabase, skipping")
             continue
 
         allowance = ramp["remaining"]
@@ -154,24 +152,23 @@ def run_daily_follows(max_accounts=None, dry_run=False, headless=True):
             continue
 
         try:
-            session = open_session(account, headless=headless, block_images=True)
+            client = create_api_client(account)
 
-            if not ensure_logged_in(session):
-                print(f"    Could not log in as @{username}, skipping")
-                close_session(session, save_cookies=False)
+            if not client:
+                print(f"    Could not create API client for @{username}, skipping")
                 total_errors += 1
                 continue
 
-            followed = follow_targets(session, targets_slice, username)
+            followed = follow_targets(client, targets_slice, username)
             total_follows += len(followed)
 
             for t in followed:
                 tracker.mark_as_used(t, followed_by=username)
 
-            close_session(session, save_cookies=True)
+            save_api_session(client, username)
 
         except Exception as e:
-            print(f"    Session error for @{username}: {e}")
+            print(f"    Error for @{username}: {e}")
             total_errors += 1
 
         if i < len(accounts) - 1:
