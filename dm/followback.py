@@ -1,6 +1,6 @@
 """
-Follow-back detection via instagrapi API.
-Gets our followers list in one API call, then cross-references with follow_log.
+Follow-back detection via Playwright browser.
+Visits each target's profile and checks for "Follows you" badge.
 """
 
 import time
@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from db.supabase_client import supabase
 from config import DM_MIN_FOLLOWBACK_AGE_DAYS, DM_MAX_FOLLOWBACK_AGE_DAYS
 from dm.storage import create_conversation, check_existing_conversation, get_target_profile
+from core.browser_follow import check_is_following_us
 
 
 def get_recent_follow_targets(account_username):
@@ -40,15 +41,14 @@ def get_recent_follow_targets(account_username):
         return []
 
 
-def detect_followbacks(client, account_username, max_checks=50):
+def detect_followbacks(page, account_username, max_checks=50):
     """
-    Detect which targets followed us back using the API.
-    Gets our full followers list in 1 call, then cross-references.
+    Detect which targets followed us back by visiting their profiles.
 
     Args:
-        client: instagrapi Client (logged in)
+        page: Playwright Page (logged in)
         account_username: our account username
-        max_checks: max new follow-backs to process
+        max_checks: max targets to check
 
     Returns:
         list of usernames who followed back
@@ -70,23 +70,13 @@ def detect_followbacks(client, account_username, max_checks=50):
         print(f"  [followback] All {len(targets)} targets already have conversations")
         return []
 
-    # Get our followers list in one API call
-    print(f"  [followback] Fetching followers for @{account_username}...")
-    try:
-        our_user_id = client.user_id_from_username(account_username)
-        followers = client.user_followers(our_user_id)
-        follower_usernames = {u.username for u in followers.values()}
-        print(f"  [followback] @{account_username} has {len(follower_usernames)} followers")
-    except Exception as e:
-        print(f"  [followback] Error fetching followers: {e}")
-        return []
-
-    # Cross-reference: which targets are in our followers?
     to_check = new_targets[:max_checks]
     followbacks = []
 
+    print(f"  [followback] Checking {len(to_check)} targets for follow-backs...")
+
     for target in to_check:
-        if target in follower_usernames:
+        if check_is_following_us(page, target):
             print(f"  [followback] + @{target} followed back!")
             followbacks.append(target)
 
@@ -96,6 +86,9 @@ def detect_followbacks(client, account_username, max_checks=50):
 
             # Create pending conversation
             create_conversation(account_username, target, target_score=score)
+
+        # Human-like delay between profile visits
+        time.sleep(random.uniform(2, 5))
 
     not_followed = len(to_check) - len(followbacks)
     print(f"  [followback] {len(followbacks)} follow-backs, {not_followed} not yet")

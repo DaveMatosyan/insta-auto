@@ -1,6 +1,6 @@
 """
 Profile setup — upload posts, set bio, add linktree link.
-Uses shared core/api_client.py for instagrapi sessions.
+Uses Playwright browser sessions for all operations.
 Run once per account to make profiles look credible before DM outreach.
 """
 
@@ -18,7 +18,8 @@ from config import (
     DM_PERSONA_STUDIES,
 )
 from core.storage import get_all_accounts
-from core.api_client import create_api_client, save_api_session
+from core.session import open_session, close_session, ensure_logged_in
+from core.browser_profile import update_bio, upload_profile_pic, upload_post
 
 # Directory with profile images to upload
 PROFILE_IMAGES_DIR = os.path.join(PROJECT_ROOT, "data", "profile_images")
@@ -47,33 +48,9 @@ def get_profile_images():
     return images
 
 
-def update_bio(cl, bio_text, linktree_url=None):
-    """Update Instagram bio and website link via API."""
-    try:
-        cl.account_edit(biography=bio_text, external_url=linktree_url or "")
-        print(f"  [profile] Bio updated: {bio_text[:50]}...")
-        if linktree_url:
-            print(f"  [profile] Website: {linktree_url}")
-        return True
-    except Exception as e:
-        print(f"  [profile] Error updating bio: {e}")
-        return False
-
-
-def upload_post(cl, image_path, caption=""):
-    """Upload a photo post via API."""
-    try:
-        media = cl.photo_upload(image_path, caption=caption)
-        print(f"  [profile] Posted: {os.path.basename(image_path)} (id={media.pk})")
-        return True
-    except Exception as e:
-        print(f"  [profile] Error uploading {os.path.basename(image_path)}: {e}")
-        return False
-
-
 def setup_account_profile(account, linktree_url=None, num_posts=6, **kwargs):
     """
-    Full profile setup for one account via API.
+    Full profile setup for one account via browser.
     """
     username = account.get("username", "???")
     print(f"\n{'='*40}")
@@ -84,29 +61,39 @@ def setup_account_profile(account, linktree_url=None, num_posts=6, **kwargs):
     if not images and num_posts > 0:
         print("[profile] No images in data/profile_images/ -- add photos and re-run")
 
-    cl = create_api_client(account)
-    if not cl:
-        print(f"  [profile] Could not log in @{username} -- skipping")
-        return {"bio": False, "posts": 0}
-
+    session = None
     results = {"bio": False, "posts": 0}
 
-    # 1. Update bio
-    bio = random.choice(BIO_TEMPLATES)
-    results["bio"] = update_bio(cl, bio, linktree_url)
+    try:
+        session = open_session(account, headless=True, block_images=False)
 
-    # 2. Upload posts
-    if images and num_posts > 0:
-        selected = random.sample(images, min(num_posts, len(images)))
-        for img in selected:
-            caption = random.choice(POST_CAPTIONS)
-            if upload_post(cl, img, caption):
-                results["posts"] += 1
-            time.sleep(random.uniform(15, 30))
-    else:
-        print("  [profile] Skipping posts (0 images)")
+        if not ensure_logged_in(session):
+            print(f"  [profile] Could not log in @{username} -- skipping")
+            return results
 
-    save_api_session(cl, username)
+        page = session.page
+
+        # 1. Update bio
+        bio = random.choice(BIO_TEMPLATES)
+        results["bio"] = update_bio(page, bio, linktree_url)
+
+        # 2. Upload posts
+        if images and num_posts > 0:
+            selected = random.sample(images, min(num_posts, len(images)))
+            for img in selected:
+                caption = random.choice(POST_CAPTIONS)
+                if upload_post(page, img, caption):
+                    results["posts"] += 1
+                time.sleep(random.uniform(15, 30))
+        else:
+            print("  [profile] Skipping posts (0 images)")
+
+    except Exception as e:
+        print(f"  [profile] Error setting up @{username}: {e}")
+
+    finally:
+        if session:
+            close_session(session)
 
     print(f"\n[profile] @{username} done: bio={'OK' if results['bio'] else 'FAIL'}, posts={results['posts']}")
     return results
