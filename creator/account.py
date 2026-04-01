@@ -462,71 +462,63 @@ def _step_accept_terms(page):
 # Post-signup helpers
 # ---------------------------------------------------------------------------
 
-def _api_handoff(username, password, email, proxy_url):
+def _browser_setup(page, context, username):
     """
-    Register the instagrapi Android device right after account creation.
-    Sets bio, uploads posts, saves API session.
+    Set up profile directly in the browser after account creation.
+    Sets bio, uploads profile pic, uploads 3 posts, saves cookies.
     Non-fatal — if this fails, the account is still saved.
     """
     try:
-        from core.api_client import create_api_client, save_api_session
-        from core.storage import update_account
+        from core.browser_profile import update_bio, upload_profile_pic, upload_post
         from profile.setup import BIO_TEMPLATES, POST_CAPTIONS, get_profile_images
         from config import FANVUE_LINK
 
-        print("\n--- API Handoff: Registering Android device ---")
+        print("\n--- Browser Setup: Profile + Posts ---")
 
-        account = {
-            "username": username,
-            "password": password,
-            "email": email,
-            "proxy_url": proxy_url,
-        }
-
-        cl = create_api_client(account)
-        if not cl:
-            print("[handoff] API login failed — will retry later via profile.runner")
-            return
+        # Unblock images for uploads
+        if BLOCK_IMAGES:
+            context.unroute("**/*.{png,jpg,jpeg,gif,webp,svg}")
 
         # Set bio + linktree
         bio = random.choice(BIO_TEMPLATES)
-        try:
-            cl.account_edit(biography=bio, external_url=FANVUE_LINK)
-            print(f"[handoff] Bio set: {bio[:50]}...")
-            print(f"[handoff] Website: {FANVUE_LINK}")
-        except Exception as e:
-            print(f"[handoff] Bio update failed: {e}")
+        if update_bio(page, bio, FANVUE_LINK):
+            print(f"[setup] Bio set: {bio[:50]}...")
+        else:
+            print("[setup] Bio update failed")
 
-        # Upload posts
+        # Upload profile pic
         images = get_profile_images()
         if images:
-            selected = random.sample(images, min(6, len(images)))
-            for i, img in enumerate(selected):
-                try:
-                    caption = random.choice(POST_CAPTIONS)
-                    cl.photo_upload(img, caption=caption)
-                    print(f"[handoff] Posted {i+1}/{len(selected)}: {os.path.basename(img)}")
-                except Exception as e:
-                    print(f"[handoff] Post {i+1} failed: {e}")
-                    break  # Stop on first failure (likely rate limit)
-                time.sleep(random.uniform(15, 30))
-
-            # Upload 1 story
-            try:
-                story_img = random.choice(images)
-                cl.photo_upload_to_story(story_img)
-                print(f"[handoff] Story uploaded")
-            except Exception as e:
-                print(f"[handoff] Story failed: {e}")
+            pfp_image = random.choice(images)
+            if upload_profile_pic(page, pfp_image):
+                print(f"[setup] Profile pic uploaded")
+            else:
+                print("[setup] Profile pic upload failed")
         else:
-            print("[handoff] No images in data/profile_images/ — skipping posts")
+            print("[setup] No images in data/profile_images/ — skipping pfp")
 
-        save_api_session(cl, username)
-        update_account(username, api_session_saved=True)
-        print("[handoff] API handoff complete!")
+        # Upload 3 posts
+        if images:
+            selected = random.sample(images, min(3, len(images)))
+            for i, img in enumerate(selected):
+                caption = random.choice(POST_CAPTIONS)
+                if upload_post(page, img, caption):
+                    print(f"[setup] Posted {i+1}/{len(selected)}: {os.path.basename(img)}")
+                else:
+                    print(f"[setup] Post {i+1} failed")
+                    break
+                time.sleep(random.uniform(15, 30))
+        else:
+            print("[setup] No images — skipping posts")
+
+        # Save cookies after setup
+        cookie_path = os.path.join(SESSIONS_DIR, f"{username}_state.json")
+        context.storage_state(path=cookie_path)
+        print(f"[setup] Cookies saved after full setup")
+        print("[setup] Browser setup complete!")
 
     except Exception as e:
-        print(f"[handoff] Error (non-fatal): {e}")
+        print(f"[setup] Error (non-fatal): {e}")
 
 
 def _save_session_and_bump_config(context, username, email, password, fullname,
@@ -552,8 +544,7 @@ def _save_session_and_bump_config(context, username, email, password, fullname,
     except Exception as e:
         print(f"Could not save cookies: {e}")
 
-    # API handoff — register Android device + set bio + upload posts
-    _api_handoff(username, password, email, proxy_url)
+    # Browser setup — set bio + upload pfp + 3 posts (done later in create_account)
 
     # Bump START_NUMBER in config.py
     try:
@@ -1174,22 +1165,8 @@ def create_account(email_number, proxy_url=None):
 
             _handle_onboarding_modals(page)
 
-            # Navigate to profile for pfp upload
-            profile_url = f"https://www.instagram.com/{username}/"
-            print(f"\nNavigating to profile: {profile_url}")
-            page.goto(profile_url, timeout=NAV_TIMEOUT)
-            human_delay(3, 5)
-
-            profile_pic = _upload_profile_picture(page, context)
-
-            # Navigate back to profile for post creation
-            # (mobile web doesn't have Create Post on home — only stories)
-            print(f"\nNavigating back to profile for post creation...")
-            page.goto(profile_url, timeout=NAV_TIMEOUT)
-            human_delay(3, 5)
-
-            exclude_file = os.path.basename(profile_pic) if profile_pic else None
-            _create_first_post(page, exclude_file)
+            # Full profile setup: bio + pfp + 3 posts + save cookies
+            _browser_setup(page, context, username)
 
             print("\nAll tasks completed! Closing browser...")
             human_delay(2, 3)
