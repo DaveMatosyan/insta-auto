@@ -288,6 +288,39 @@ def upload_post(page, image_path, caption=""):
             except Exception:
                 pass
 
+        # Step 1b: If a dropdown menu appeared (Post / Story / Reel), click "Post"
+        for post_text in ["Post", "post"]:
+            try:
+                post_option = page.locator(f'a:has-text("{post_text}"), div[role="button"]:has-text("{post_text}"), span:has-text("{post_text}")').first
+                if post_option.is_visible(timeout=3000):
+                    post_option.click()
+                    human_delay(2, 3)
+                    print("  [profile] Selected 'Post' from create menu")
+                    break
+            except Exception:
+                continue
+
+        # If we ended up in story mode, go back and try the direct post URL
+        if "story" in page.url.lower() or "/creation/" in page.url.lower():
+            print("  [profile] Detected story mode, switching to post creation...")
+            try:
+                # Close story editor
+                close_btn = page.locator('button[aria-label="Close"], svg[aria-label="Close"], button:has-text("Discard")').first
+                if close_btn.is_visible(timeout=3000):
+                    close_btn.click()
+                    human_delay(1, 2)
+                # Confirm discard if prompted
+                discard_btn = page.locator('button:has-text("Discard")').first
+                if discard_btn.is_visible(timeout=3000):
+                    discard_btn.click()
+                    human_delay(1, 2)
+            except Exception:
+                pass
+            # Navigate to post creation directly
+            page.goto("https://www.instagram.com/create/select/",
+                      wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+            human_delay(2, 4)
+
         # Step 2: Upload image
         # Look for "Select from computer" button or direct file input
         for sel_text in ["Select from computer", "Select from gallery", "Select"]:
@@ -316,7 +349,7 @@ def upload_post(page, image_path, caption=""):
                 human_delay(3, 5)
 
                 # Check if we're in story mode (wrong input) vs post mode
-                if "story" in page.url.lower():
+                if "story" in page.url.lower() or "/creation/" in page.url.lower():
                     try:
                         page.locator('button:has-text("Close")').first.click()
                         human_delay(1, 2)
