@@ -571,32 +571,37 @@ def _save_session_and_bump_config(context, page, browser, username, email, passw
 
 
 def _handle_onboarding_modals(page):
-    """Dismiss 'Not Now', 'Close', and 'Skip' modals after signup."""
+    """Dismiss 'Not Now', 'Not now', 'Save info', 'Close', and 'Skip' modals after signup."""
     print("\nHandling onboarding modals...")
     human_delay(2, 3)
 
-    try:
-        not_now_btn = page.locator('div[role="button"]:has-text("Not Now")').first
-        if not_now_btn.is_visible(timeout=ELEMENT_TIMEOUT):
-            print("Clicking 'Not Now' button...")
-            not_now_btn.click()
-            human_delay(2, 3)
-    except:
-        pass
+    # Dismiss "Save your login info?" modal — click "Not now" (lowercase)
+    for dismiss_text in ["Not now", "Not Now"]:
+        try:
+            btn = page.locator(f'button:has-text("{dismiss_text}"), div[role="button"]:has-text("{dismiss_text}")').first
+            if btn.is_visible(timeout=5000):
+                print(f"Clicking '{dismiss_text}' button...")
+                btn.click()
+                human_delay(2, 3)
+                break
+        except Exception:
+            continue
 
+    # Close X button on any modal
     try:
-        close_btn = page.locator('div[role="button"][aria-label="Close"]').first
-        if close_btn.is_visible(timeout=ELEMENT_TIMEOUT):
+        close_btn = page.locator('div[role="button"][aria-label="Close"], button[aria-label="Close"], svg[aria-label="Close"]').first
+        if close_btn.is_visible(timeout=5000):
             print("Closing modal...")
             close_btn.click()
             human_delay(1, 2)
-    except:
+    except Exception:
         pass
 
+    # Skip onboarding steps
     for skip_i in range(3):
         try:
-            skip_btn = page.locator('div[role="button"]:has-text("Skip")').first
-            if skip_btn.is_visible(timeout=ELEMENT_TIMEOUT):
+            skip_btn = page.locator('div[role="button"]:has-text("Skip"), button:has-text("Skip")').first
+            if skip_btn.is_visible(timeout=5000):
                 print(f"Skipping step {skip_i + 1}/3...")
                 skip_btn.click()
                 human_delay(2, 3)
@@ -604,6 +609,18 @@ def _handle_onboarding_modals(page):
                 break
         except Exception:
             break
+
+    # Dismiss "Turn on Notifications" popup
+    for dismiss_text in ["Not Now", "Not now"]:
+        try:
+            btn = page.locator(f'button:has-text("{dismiss_text}")').first
+            if btn.is_visible(timeout=3000):
+                print(f"Dismissing notifications popup...")
+                btn.click()
+                human_delay(1, 2)
+                break
+        except Exception:
+            continue
 
 
 # ---------------------------------------------------------------------------

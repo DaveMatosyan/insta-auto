@@ -14,6 +14,28 @@ NAV_TIMEOUT = 30000
 ELEMENT_TIMEOUT = 15000
 
 
+def _dismiss_modals(page):
+    """Dismiss any popups/modals that might block the page (login info, notifications, etc.)."""
+    for dismiss_text in ["Not now", "Not Now"]:
+        try:
+            btn = page.locator(f'button:has-text("{dismiss_text}"), div[role="button"]:has-text("{dismiss_text}")').first
+            if btn.is_visible(timeout=3000):
+                btn.click()
+                human_delay(1, 2)
+                return
+        except Exception:
+            continue
+
+    # Try X / Close button
+    try:
+        close_btn = page.locator('div[role="dialog"] button[aria-label="Close"], svg[aria-label="Close"]').first
+        if close_btn.is_visible(timeout=2000):
+            close_btn.click()
+            human_delay(1, 2)
+    except Exception:
+        pass
+
+
 def update_bio(page, bio_text, website_url=None):
     """
     Update Instagram bio and website link via browser.
@@ -30,6 +52,7 @@ def update_bio(page, bio_text, website_url=None):
         page.goto("https://www.instagram.com/accounts/edit/",
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
         human_delay(3, 5)
+        _dismiss_modals(page)
 
         # Fill bio
         bio_filled = False
@@ -123,6 +146,7 @@ def upload_profile_pic(page, image_path):
         page.goto("https://www.instagram.com/accounts/edit/",
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
         human_delay(3, 5)
+        _dismiss_modals(page)
 
         # Click "Change profile photo" / avatar area
         change_clicked = False
@@ -218,6 +242,7 @@ def upload_post(page, image_path, caption=""):
         page.goto("https://www.instagram.com/",
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
         human_delay(2, 4)
+        _dismiss_modals(page)
 
         # Step 1: Click Create/New post button
         create_clicked = False
