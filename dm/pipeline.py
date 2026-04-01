@@ -1,8 +1,8 @@
 """
-DM pipeline — main daily orchestrator using instagrapi API.
+DM pipeline — main daily orchestrator using Playwright browser sessions.
 
 Flow per account:
-1. Phase A: Check follow-backs (1 API call)
+1. Phase A: Check follow-backs (visit profiles)
 2. Phase B: Send openers to pending conversations
 3. Phase D: Check inbox for new replies
 4. Phase C: Reply to active conversations with AI
@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from core.storage import get_all_accounts
-from core.api_client import create_api_client, save_api_session
+from core.session import open_session, close_session, ensure_logged_in
 from config import (
     DM_BETWEEN_THREADS_SEC,
     DM_COLD_AFTER_HOURS,
@@ -42,7 +42,7 @@ from dm.storage import (
     get_conversation_stats,
 )
 from dm.followback import detect_followbacks
-from dm.inbox import send_dm, get_last_message_from_them, get_unread_threads, get_our_user_id
+from dm.inbox import send_dm, get_last_message_from_them, get_unread_threads, get_our_username
 from dm.conversation import (
     init_gemini,
     generate_opener,
@@ -61,15 +61,15 @@ def _is_active_hours():
     return start <= current_hour < end
 
 
-def phase_a_detect_followbacks(client, account_username):
-    """Phase A: Check for new follow-backs via API."""
+def phase_a_detect_followbacks(page, account_username):
+    """Phase A: Check for new follow-backs via browser."""
     print(f"\n  [Phase A] Detecting follow-backs for @{account_username}...")
-    followbacks = detect_followbacks(client, account_username, max_checks=30)
+    followbacks = detect_followbacks(page, account_username, max_checks=30)
     print(f"  [Phase A] Found {len(followbacks)} new follow-backs")
     return len(followbacks)
 
 
-def phase_b_send_openers(client, account_username, model, dm_budget):
+def phase_b_send_openers(page, account_username, model, dm_budget):
     """Phase B: Send openers to pending conversations."""
     print(f"\n  [Phase B] Sending openers (budget: {dm_budget})...")
 
@@ -93,7 +93,7 @@ def phase_b_send_openers(client, account_username, model, dm_budget):
         opener = generate_opener(model, profile)
         print(f"  [Phase B] Opener: {opener[:80]}...")
 
-        if send_dm(client, target, opener):
+        if send_dm(page, target, opener):
             now = datetime.now(timezone.utc).isoformat()
             log_message(conv_id, account_username, target, "outbound", opener)
             update_conversation(conv_id,
@@ -119,7 +119,7 @@ def phase_b_send_openers(client, account_username, model, dm_budget):
     return sent
 
 
-def phase_c_handle_replies(client, account_username, model, dm_budget, our_user_id):
+def phase_c_handle_replies(page, account_username, model, dm_budget):
     """Phase C: Reply to active conversations."""
     print(f"\n  [Phase C] Handling replies (budget: {dm_budget})...")
 
@@ -166,7 +166,7 @@ def phase_c_handle_replies(client, account_username, model, dm_budget, our_user_
         reply, current_stage = generate_reply(model, conv, history, profile)
         print(f"  [Phase C] Reply: {reply[:80]}... (stage: {current_stage})")
 
-        if send_dm(client, target, reply):
+        if send_dm(page, target, reply):
             now = datetime.now(timezone.utc).isoformat()
             log_message(conv_id, account_username, target, "outbound", reply)
 
@@ -178,7 +178,7 @@ def phase_c_handle_replies(client, account_username, model, dm_budget, our_user_
             update_conversation(conv_id, **updates)
             record_dm_sent(account_username)
             sent += 1
-            print(f"  [Phase C] Reply sent to @{target} (stage: {new_stage})")
+            print(f"  [Phase C] Reply sent to @{target} (stage: {current_stage})")
         else:
             print(f"  [Phase C] Failed to reply to @{target}")
 
@@ -191,8 +191,8 @@ def phase_c_handle_replies(client, account_username, model, dm_budget, our_user_
     return sent
 
 
-def phase_d_check_inbox_for_new_replies(client, account_username, our_user_id):
-    """Phase D: Scan inbox for unread messages and log them."""
+def phase_d_check_inbox_for_new_replies(page, account_username):
+    """Phase D: Scan inbox for new messages and log them."""
     print(f"\n  [Phase D] Scanning inbox for new replies...")
 
     active_convos = get_active_conversations(account_username)
@@ -211,7 +211,7 @@ def phase_d_check_inbox_for_new_replies(client, account_username, our_user_id):
         conv_id = conv["id"]
 
         try:
-            last_msg = get_last_message_from_them(client, target, our_user_id)
+            last_msg = get_last_message_from_them(page, target)
 
             if last_msg:
                 _, history = get_conversation_with_history(conv_id)
@@ -250,19 +250,16 @@ def phase_d_check_inbox_for_new_replies(client, account_username, our_user_id):
     return new_replies
 
 
-def phase_e_send_followups(client, account_username, model, dm_budget):
+def phase_e_send_followups(page, account_username, model, dm_budget):
     """
     Phase E: Follow up on unresponsive targets.
-    3 attempts max: opener → 48h → follow-up #1 → 24h → follow-up #2 → dead
+    3 attempts max: opener -> 48h -> follow-up #1 -> 24h -> follow-up #2 -> dead
     """
     print(f"\n  [Phase E] Checking for follow-up opportunities (budget: {dm_budget})...")
 
-    # Check for conversations needing follow-up #1 (48h since opener)
     followup_1 = get_conversations_needing_followup(account_username, DM_FOLLOWUP_1_AFTER_HOURS)
-    # Check for conversations needing follow-up #2 (24h since follow-up #1)
     followup_2 = get_conversations_needing_followup(account_username, DM_FOLLOWUP_2_AFTER_HOURS)
 
-    # Deduplicate and separate by attempt count
     needs_followup = []
     seen_ids = set()
 
@@ -270,7 +267,7 @@ def phase_e_send_followups(client, account_username, model, dm_budget):
         if conv["id"] in seen_ids:
             continue
         seen_ids.add(conv["id"])
-        attempts = conv.get("attempts") or 1  # opener counts as 1
+        attempts = conv.get("attempts") or 1
         if attempts < DM_MAX_COLD_ATTEMPTS:
             needs_followup.append(conv)
 
@@ -285,7 +282,6 @@ def phase_e_send_followups(client, account_username, model, dm_budget):
         target = conv["target_username"]
         attempts = conv.get("attempts") or 1
 
-        # Check if this is attempt 2 or 3
         attempt_number = attempts + 1
 
         if attempt_number > DM_MAX_COLD_ATTEMPTS:
@@ -299,7 +295,7 @@ def phase_e_send_followups(client, account_username, model, dm_budget):
         followup = generate_followup(model, conv, history, attempt_number)
         print(f"  [Phase E] Follow-up: {followup[:80]}...")
 
-        if send_dm(client, target, followup):
+        if send_dm(page, target, followup):
             now = datetime.now(timezone.utc).isoformat()
             log_message(conv_id, account_username, target, "outbound", followup)
             increment_attempts(conv_id)
@@ -308,7 +304,6 @@ def phase_e_send_followups(client, account_username, model, dm_budget):
             sent += 1
             print(f"  [Phase E] Follow-up #{attempt_number} sent to @{target}")
 
-            # If this was the last attempt and no reply, mark dead
             if attempt_number >= DM_MAX_COLD_ATTEMPTS:
                 update_conversation(conv_id, stage="dead", outcome="dead")
                 print(f"  [Phase E] @{target} marked dead (final attempt sent)")
@@ -325,10 +320,8 @@ def phase_e_send_followups(client, account_username, model, dm_budget):
 
 def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
     """
-    Main entry point — run the full DM pipeline for all accounts via API.
-    Checks activity hours before processing.
+    Main entry point — run the full DM pipeline for all accounts via browser.
     """
-    # Check activity hours
     if not _is_active_hours():
         h_start, h_end = DM_ACTIVE_HOURS
         print(f"Outside active hours ({h_start}:00-{h_end}:00). Skipping DM run.")
@@ -344,7 +337,7 @@ def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
     all_accounts = {a["username"]: a for a in get_all_accounts() if a.get("role") != "scraper"}
 
     print(f"\n{'='*60}")
-    print(f"DM PIPELINE RUN (API-BASED)")
+    print(f"DM PIPELINE RUN (BROWSER-BASED)")
     print(f"Accounts: {len(accounts_info)}")
     print(f"Dry run: {dry_run}")
     print(f"Active hours: {DM_ACTIVE_HOURS[0]}:00-{DM_ACTIVE_HOURS[1]}:00")
@@ -386,18 +379,19 @@ def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
             print(f"    [DRY RUN] Would process DMs")
             continue
 
+        session = None
         try:
-            client = create_api_client(account)
+            session = open_session(account, headless=True)
 
-            if not client:
-                print(f"    Could not create API client for @{username}, skipping")
+            if not ensure_logged_in(session):
+                print(f"    Could not log in @{username}, skipping")
                 errors += 1
                 continue
 
-            our_user_id = get_our_user_id(client)
+            page = session.page
 
             # Phase A: Detect follow-backs
-            fb = phase_a_detect_followbacks(client, username)
+            fb = phase_a_detect_followbacks(page, username)
             total_followbacks += fb
 
             # Budget: 50% openers, 30% replies, 20% follow-ups
@@ -406,29 +400,31 @@ def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
             followup_budget = dm_remaining - opener_budget - reply_budget
 
             # Phase B: Send openers
-            openers = phase_b_send_openers(client, username, model, opener_budget)
+            openers = phase_b_send_openers(page, username, model, opener_budget)
             total_openers += openers
 
             # Phase D: Check inbox
-            phase_d_check_inbox_for_new_replies(client, username, our_user_id)
+            phase_d_check_inbox_for_new_replies(page, username)
 
             # Phase C: Reply to conversations
             remaining = dm_remaining - openers
             if remaining > 0:
-                replies = phase_c_handle_replies(client, username, model, min(remaining, reply_budget), our_user_id)
+                replies = phase_c_handle_replies(page, username, model, min(remaining, reply_budget))
                 total_replies += replies
                 remaining -= replies
 
             # Phase E: Follow-ups for cold targets
             if remaining > 0:
-                followups = phase_e_send_followups(client, username, model, min(remaining, followup_budget))
+                followups = phase_e_send_followups(page, username, model, min(remaining, followup_budget))
                 total_followups += followups
-
-            save_api_session(client, username)
 
         except Exception as e:
             print(f"    Error for @{username}: {e}")
             errors += 1
+
+        finally:
+            if session:
+                close_session(session)
 
         if i < len(accounts_info) - 1:
             wait = random.uniform(60, 120)

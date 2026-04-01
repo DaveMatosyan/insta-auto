@@ -1,5 +1,5 @@
 """
-Parallel follow — run N accounts simultaneously via API, each follows its ramp allowance.
+Parallel follow — run N accounts simultaneously via browser, each follows its ramp allowance.
 
 Usage:
     python parallel_follow.py --accounts 2
@@ -14,7 +14,8 @@ import threading
 
 from config import PROJECT_ROOT, SESSIONS_DIR
 from core.storage import get_all_accounts
-from core.api_client import create_api_client, save_api_session
+from core.session import open_session, close_session, ensure_logged_in
+from core.browser_follow import follow_user
 from csv_management.username_manager import UsernameTracker
 from follow.ramp import (
     get_all_active_accounts,
@@ -25,7 +26,7 @@ from follow.ramp import (
 
 def follow_targets_for_account(account, targets, result_store, lock):
     """
-    Follow targets for one account via API. Runs in its own thread.
+    Follow targets for one account via browser. Runs in its own thread.
     """
     username = account.get("username", "???")
     followed = []
@@ -33,33 +34,35 @@ def follow_targets_for_account(account, targets, result_store, lock):
 
     print(f"\n[{username}] Starting -- {len(targets)} targets to follow")
 
+    session = None
     try:
-        client = create_api_client(account)
+        session = open_session(account, headless=True)
 
-        if not client:
-            print(f"[{username}] Could not create API client, skipping")
+        if not ensure_logged_in(session):
+            print(f"[{username}] Could not log in, skipping")
             with lock:
                 result_store[username] = {"followed": [], "errors": 1}
             return
 
+        page = session.page
+
         for i, target in enumerate(targets):
             try:
                 print(f"[{username}] [{i+1}/{len(targets)}] -> @{target}")
-                user_id = client.user_id_from_username(target)
-                client.user_follow(user_id)
-                print(f"[{username}]    Followed @{target}")
-                followed.append(target)
+                if follow_user(page, target):
+                    print(f"[{username}]    Followed @{target}")
+                    followed.append(target)
 
-                try:
-                    record_follow(username, target)
-                except Exception as e:
-                    print(f"[{username}]    Warning: failed to record: {e}")
+                    try:
+                        record_follow(username, target)
+                    except Exception as e:
+                        print(f"[{username}]    Warning: failed to record: {e}")
+                else:
+                    print(f"[{username}]    Could not follow @{target}")
 
             except Exception as e:
                 err = str(e).lower()
-                if "not found" in err:
-                    print(f"[{username}]    @{target} not found")
-                elif "challenge" in err:
+                if "challenge" in err:
                     print(f"[{username}]    Challenge! Stopping.")
                     errors += 1
                     break
@@ -76,12 +79,15 @@ def follow_targets_for_account(account, targets, result_store, lock):
                 print(f"[{username}]    {wait:.0f}s before next...")
                 time.sleep(wait)
 
-        save_api_session(client, username)
         print(f"\n[{username}] Done -- followed {len(followed)}/{len(targets)}")
 
     except Exception as e:
         print(f"[{username}] Failed: {e}")
         errors += 1
+
+    finally:
+        if session:
+            close_session(session)
 
     with lock:
         result_store[username] = {"followed": followed, "errors": errors}
@@ -112,7 +118,7 @@ def run_parallel_follows(num_accounts=2, dry_run=False):
     unused = tracker.get_unused_usernames()
 
     print(f"\n{'='*60}")
-    print(f"PARALLEL FOLLOW (API-BASED, RAMP)")
+    print(f"PARALLEL FOLLOW (BROWSER-BASED, RAMP)")
     print(f"Accounts: {len(selected)}")
     print(f"Targets available: {len(unused)}")
     print(f"{'='*60}")
@@ -154,7 +160,7 @@ def run_parallel_follows(num_accounts=2, dry_run=False):
         )
         threads.append(t)
 
-    print("Launching all API clients simultaneously...\n")
+    print("Launching all browser sessions simultaneously...\n")
     for t in threads:
         t.start()
         time.sleep(2)
