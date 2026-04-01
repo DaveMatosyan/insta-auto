@@ -415,7 +415,7 @@ def get_our_username(page):
     """Get the logged-in user's username from the page."""
     try:
         # Try reading from profile link in nav
-        username = page.evaluate("""
+        username = page.evaluate(r"""
             () => {
                 // Check for profile link in navigation
                 const profileLink = document.querySelector('a[href*="/"][role="link"] img[alt]');

@@ -18,7 +18,6 @@ from core.storage import get_all_accounts
 from core.session import open_session, close_session, ensure_logged_in
 from config import (
     DM_BETWEEN_THREADS_SEC,
-    DM_COLD_AFTER_HOURS,
     DM_MAX_COLD_ATTEMPTS,
     DM_FOLLOWUP_1_AFTER_HOURS,
     DM_FOLLOWUP_2_AFTER_HOURS,
