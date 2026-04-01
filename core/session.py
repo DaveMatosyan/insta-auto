@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserCon
 
 from config import SESSIONS_DIR, BLOCK_IMAGES
 from core.utils import parse_proxy_url
-from core.stealth import STEALTH_SCRIPT
+from core.stealth import get_stealth_script
 from core.proxy import get_fresh_proxy
 
 
@@ -82,18 +82,18 @@ def open_session(account, headless=True, block_images=None, no_proxy=False):
     screen = fingerprint.get("screen", {})
     ctx_kwargs = {
         "viewport": {
-            "width": screen.get("width", random.choice([375, 390, 430])),
-            "height": screen.get("height", random.choice([812, 844, 932])),
+            "width": screen.get("width", 412),
+            "height": screen.get("height", 915),
         },
         "user_agent": fingerprint.get("user_agent",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1"),
+            "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"),
         "locale": "en-US",
         "timezone_id": fingerprint.get("timezone", "America/Los_Angeles"),
         "permissions": [],
         "geolocation": None,
         "is_mobile": True,
         "has_touch": True,
-        "device_scale_factor": random.choice([2, 3]),
+        "device_scale_factor": fingerprint.get("device_scale_factor", 2.625),
         "extra_http_headers": {
             "Accept-Language": fingerprint.get("accept_language", "en-US,en;q=0.9"),
         },
@@ -106,7 +106,8 @@ def open_session(account, headless=True, block_images=None, no_proxy=False):
         ctx_kwargs["storage_state"] = cookie_file
 
     context = browser.new_context(**ctx_kwargs)
-    context.add_init_script(STEALTH_SCRIPT)
+    # Inject stealth script matched to this account's device fingerprint
+    context.add_init_script(get_stealth_script(fingerprint))
 
     if block_images:
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg}", lambda route: route.abort())

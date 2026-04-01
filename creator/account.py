@@ -17,9 +17,9 @@ from config import (
     USE_GMAIL_API, SESSIONS_DIR, BLOCK_IMAGES,
     IMAGES_DIR, PROJECT_ROOT,
 )
-from core.utils import generate_random_string, print_account_info, generate_browser_fingerprint, parse_proxy_url, human_delay
+from core.utils import generate_random_string, print_account_info, generate_browser_fingerprint, parse_proxy_url, human_delay, pick_device_profile
 from core.storage import save_account
-from core.stealth import STEALTH_SCRIPT
+from core.stealth import get_stealth_script
 
 # Import Gmail method based on config
 if USE_GMAIL_API:
@@ -186,13 +186,17 @@ def get_verification_code_from_gmail_imap(email_to_check, max_retries=12, retry_
 # ---------------------------------------------------------------------------
 
 def _setup_browser(playwright, fingerprint, proxy_url=None):
-    """Launch browser and create a stealth context.
+    """Launch browser and create a stealth context matching the Android device profile.
+
+    Uses the fingerprint's actual screen dimensions, scale factor, and user agent
+    so the browser identity matches the instagrapi API identity exactly.
 
     Returns:
         tuple: (browser, context, page)
     """
-    screen_width = random.choice([375, 390, 393, 412, 414, 430])
-    screen_height = random.choice([812, 844, 851, 915, 896, 932])
+    screen = fingerprint.get("screen", {})
+    screen_width = screen.get("width", 412)
+    screen_height = screen.get("height", 915)
 
     browser = playwright.chromium.launch(
         headless=False,
@@ -210,14 +214,14 @@ def _setup_browser(playwright, fingerprint, proxy_url=None):
 
     ctx_kwargs = dict(
         viewport={'width': screen_width, 'height': screen_height},
-        user_agent=fingerprint.get('user_agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15'),
+        user_agent=fingerprint.get('user_agent'),
         locale='en-US',
         timezone_id=fingerprint.get('timezone', 'America/Los_Angeles'),
         permissions=[],
         geolocation=None,
         is_mobile=True,
         has_touch=True,
-        device_scale_factor=random.choice([2, 3]),
+        device_scale_factor=fingerprint.get('device_scale_factor', 2.625),
         extra_http_headers={
             'Accept-Language': fingerprint.get('accept_language', 'en-US,en;q=0.9'),
         }
@@ -230,7 +234,8 @@ def _setup_browser(playwright, fingerprint, proxy_url=None):
     if BLOCK_IMAGES:
         context.route("**/*.{png,jpg,jpeg,gif,webp,svg}", lambda route: route.abort())
 
-    context.add_init_script(STEALTH_SCRIPT)
+    # Inject stealth script matched to this device's GPU/platform
+    context.add_init_script(get_stealth_script(fingerprint))
     page = context.new_page()
 
     return browser, context, page
@@ -462,10 +467,10 @@ def _step_accept_terms(page):
 # Post-signup helpers
 # ---------------------------------------------------------------------------
 
-def _api_handoff(username, password, email, proxy_url):
+def _api_handoff(username, password, email, proxy_url, fingerprint=None):
     """
-    Register the instagrapi Android device right after account creation.
-    Sets bio, uploads posts, saves API session.
+    Log in via instagrapi using the SAME Android device that was used
+    during browser account creation. Sets bio, uploads posts, saves API session.
     Non-fatal — if this fails, the account is still saved.
     """
     try:
@@ -474,13 +479,16 @@ def _api_handoff(username, password, email, proxy_url):
         from profile.setup import BIO_TEMPLATES, POST_CAPTIONS, get_profile_images
         from config import FANVUE_LINK
 
-        print("\n--- API Handoff: Registering Android device ---")
+        print("\n--- API Handoff: Logging in with same Android device ---")
 
+        # Pass fingerprint (with embedded device_profile) so api_client
+        # uses the exact same device identity as the browser session
         account = {
             "username": username,
             "password": password,
             "email": email,
             "proxy_url": proxy_url,
+            "fingerprint": fingerprint or {},
         }
 
         cl = create_api_client(account)
@@ -529,9 +537,9 @@ def _api_handoff(username, password, email, proxy_url):
         print(f"[handoff] Error (non-fatal): {e}")
 
 
-def _save_session_and_bump_config(context, username, email, password, fullname,
-                                   fingerprint, proxy_url):
-    """Save account to JSON, save cookies, bump START_NUMBER in config."""
+def _save_session_and_bump_config(context, page, browser, username, email, password,
+                                   fullname, fingerprint, proxy_url, email_number=None):
+    """Save account, log out of browser, then do API handoff with same device."""
     print("\n" + "=" * 60)
     print("ACCOUNT CREATION COMPLETE!")
     print("=" * 60)
@@ -552,8 +560,51 @@ def _save_session_and_bump_config(context, username, email, password, fullname,
     except Exception as e:
         print(f"Could not save cookies: {e}")
 
-    # API handoff — register Android device + set bio + upload posts
-    _api_handoff(username, password, email, proxy_url)
+    # ── Log out of browser BEFORE API handoff ──
+    # This prevents Instagram from seeing two concurrent sessions on different
+    # device types. The browser session ends cleanly, then instagrapi logs in
+    # on the same Android device identity.
+    try:
+        print("Logging out of browser session before API handoff...")
+        page.goto("https://www.instagram.com/accounts/logout/", timeout=15000)
+        human_delay(2, 3)
+        # Confirm logout if prompted
+        try:
+            confirm_btn = page.locator('button:has-text("Log Out"), div[role="button"]:has-text("Log out")').first
+            if confirm_btn.is_visible(timeout=3000):
+                confirm_btn.click()
+                human_delay(2, 3)
+        except Exception:
+            pass
+        print("Browser session logged out.")
+    except Exception as e:
+        print(f"Browser logout failed (non-fatal): {e}")
+
+    # Close browser before API handoff to avoid concurrent sessions
+    try:
+        browser.close()
+        print("Browser closed.")
+    except Exception:
+        pass
+
+    # Transfer the proxy session to the real username so future
+    # get_fresh_proxy() calls reuse the same IP
+    try:
+        from core.proxy import _load_sessions, _save_sessions
+        sessions = _load_sessions()
+        temp_key = f"new_account_{email_number}" if email_number else None
+        if temp_key and temp_key in sessions:
+            sessions[username] = sessions.pop(temp_key)
+            print(f"Transferred proxy session to @{username}")
+        _save_sessions(sessions)
+    except Exception as e:
+        print(f"Could not transfer proxy session: {e}")
+
+    # Small delay to let Instagram process the logout
+    human_delay(5, 10)
+
+    # API handoff — log in with the SAME Android device profile + SAME IP
+    _api_handoff(username, password, email, proxy_url, fingerprint=fingerprint)
 
     # Bump START_NUMBER in config.py
     try:
@@ -1129,11 +1180,15 @@ def create_account(email_number, proxy_url=None):
         proxy_url (str): Proxy URL to route traffic through (optional)
     """
     email = f"{BASE_EMAIL_PREFIX}+{email_number}{EMAIL_DOMAIN}"
-    fingerprint = generate_browser_fingerprint()
 
-    print(f"Generated Browser Fingerprint: {fingerprint['device_model']}")
-    print(f"Timezone: {fingerprint.get('timezone', 'America/Los_Angeles')}")
-    print(f"User Agent: {fingerprint.get('user_agent', 'None')}")
+    # Pick device profile FIRST — this is the single identity for everything
+    device_profile = pick_device_profile()
+    fingerprint = generate_browser_fingerprint(device_profile)
+
+    print(f"Device: {fingerprint['device_model']}")
+    print(f"Timezone: {fingerprint.get('timezone')}")
+    print(f"User Agent: {fingerprint.get('user_agent')}")
+    print(f"GPU: {fingerprint['webgl']['vendor']} / {fingerprint['webgl']['renderer']}")
     if proxy_url:
         print(f"Proxy: {proxy_url[:50]}...")
 
@@ -1167,11 +1222,6 @@ def create_account(email_number, proxy_url=None):
             _step_username(page, username)
             _step_accept_terms(page)
 
-            _save_session_and_bump_config(
-                context, username, email, password, fullname,
-                fingerprint, proxy_url,
-            )
-
             _handle_onboarding_modals(page)
 
             # Navigate to profile for pfp upload
@@ -1183,7 +1233,6 @@ def create_account(email_number, proxy_url=None):
             profile_pic = _upload_profile_picture(page, context)
 
             # Navigate back to profile for post creation
-            # (mobile web doesn't have Create Post on home — only stories)
             print(f"\nNavigating back to profile for post creation...")
             page.goto(profile_url, timeout=NAV_TIMEOUT)
             human_delay(3, 5)
@@ -1191,8 +1240,15 @@ def create_account(email_number, proxy_url=None):
             exclude_file = os.path.basename(profile_pic) if profile_pic else None
             _create_first_post(page, exclude_file)
 
-            print("\nAll tasks completed! Closing browser...")
+            print("\nBrowser tasks done. Saving account & handing off to API...")
             human_delay(2, 3)
+
+            # Save account, log out browser, close browser, then API handoff
+            # (browser is closed inside _save_session_and_bump_config)
+            _save_session_and_bump_config(
+                context, page, browser, username, email, password,
+                fullname, fingerprint, proxy_url, email_number=email_number,
+            )
 
             return True
 
@@ -1203,4 +1259,7 @@ def create_account(email_number, proxy_url=None):
             return False
 
         finally:
-            browser.close()
+            try:
+                browser.close()
+            except Exception:
+                pass  # Already closed by _save_session_and_bump_config

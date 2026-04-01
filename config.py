@@ -30,7 +30,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "redditakk4"  # Will become redditakk4+1100@gmail.com, redditakk4+1101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 1000001  # Starting number for email suffix (7 digits to avoid matching 6-digit verification codes)
+START_NUMBER = 1000007  # Starting number for email suffix (7 digits to avoid matching 6-digit verification codes)
 NUM_ACCOUNTS = 1   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---

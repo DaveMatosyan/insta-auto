@@ -2,6 +2,10 @@
 Shared instagrapi client manager — creates authenticated API clients for all modules.
 Handles session persistence, proxy setup, device fingerprints, UUID preservation,
 and challenge auto-resolution via Gmail.
+
+Device identity: uses the SAME Android device profile that was assigned during
+account creation (stored in the account's fingerprint.device_profile in Supabase).
+This prevents Instagram from seeing a "device change" between browser and API.
 """
 
 import os
@@ -13,26 +17,11 @@ from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
 
 from config import SESSIONS_DIR
 from core.proxy import get_fresh_proxy
+from core.utils import DEVICE_PROFILES
 
 
 # Session files stored in {SESSIONS_DIR}/api/
 API_SESSIONS_DIR = os.path.join(SESSIONS_DIR, "api")
-
-# ── Real device profiles (12 combos) — each account gets one permanently ──
-DEVICE_PROFILES = [
-    {"manufacturer": "samsung", "model": "SM-S918B", "android_version": 34, "android_release": "14", "dpi": "480dpi", "resolution": "1080x2340", "cpu": "exynos2200", "version_code": "314665256"},
-    {"manufacturer": "samsung", "model": "SM-G998B", "android_version": 33, "android_release": "13", "dpi": "640dpi", "resolution": "1440x3200", "cpu": "exynos2100", "version_code": "314665256"},
-    {"manufacturer": "samsung", "model": "SM-A546B", "android_version": 34, "android_release": "14", "dpi": "400dpi", "resolution": "1080x2400", "cpu": "exynos1380", "version_code": "314665256"},
-    {"manufacturer": "samsung", "model": "SM-S916B", "android_version": 34, "android_release": "14", "dpi": "480dpi", "resolution": "1080x2340", "cpu": "exynos2200", "version_code": "314665256"},
-    {"manufacturer": "Google", "model": "Pixel 8 Pro", "android_version": 34, "android_release": "14", "dpi": "480dpi", "resolution": "1344x2992", "cpu": "tensor_g3", "version_code": "314665256"},
-    {"manufacturer": "Google", "model": "Pixel 7", "android_version": 34, "android_release": "14", "dpi": "420dpi", "resolution": "1080x2400", "cpu": "tensor_g2", "version_code": "314665256"},
-    {"manufacturer": "Google", "model": "Pixel 8a", "android_version": 34, "android_release": "14", "dpi": "420dpi", "resolution": "1080x2400", "cpu": "tensor_g3", "version_code": "314665256"},
-    {"manufacturer": "OnePlus", "model": "CPH2449", "android_version": 34, "android_release": "14", "dpi": "480dpi", "resolution": "1240x2772", "cpu": "qcom", "version_code": "314665256"},
-    {"manufacturer": "OnePlus", "model": "NE2215", "android_version": 33, "android_release": "13", "dpi": "480dpi", "resolution": "1080x2400", "cpu": "qcom", "version_code": "314665256"},
-    {"manufacturer": "Xiaomi", "model": "23049PCD8G", "android_version": 34, "android_release": "14", "dpi": "440dpi", "resolution": "1220x2712", "cpu": "qcom", "version_code": "314665256"},
-    {"manufacturer": "Xiaomi", "model": "2211133G", "android_version": 33, "android_release": "13", "dpi": "440dpi", "resolution": "1080x2400", "cpu": "qcom", "version_code": "314665256"},
-    {"manufacturer": "motorola", "model": "motorola edge 40 pro", "android_version": 34, "android_release": "14", "dpi": "400dpi", "resolution": "1080x2400", "cpu": "qcom", "version_code": "314665256"},
-]
 
 
 def _get_session_path(username):
@@ -61,34 +50,54 @@ def _get_verification_code(email, wait_sec=10):
     return ""
 
 
-def _assign_device_profile(username):
+def _assign_device_profile(account):
     """
-    Assign a unique device profile to an account and save it to Supabase.
-    If already assigned, return the existing one.
-    """
-    from db.supabase_client import supabase
+    Get the device profile for an account.
 
+    Priority order:
+      1. device_profile already on the account dict (passed in from caller)
+      2. device_profile embedded inside the account's fingerprint
+         (set during account creation — this is the canonical source)
+      3. device_profile stored separately in Supabase (legacy)
+      4. Assign a new random profile and save it (fallback for old accounts)
+    """
+    username = account.get("username", "")
+
+    # 1. Already on the account dict
+    if account.get("device_profile"):
+        return account["device_profile"]
+
+    # 2. Embedded in fingerprint (new unified flow)
+    fp = account.get("fingerprint", {})
+    if isinstance(fp, dict) and fp.get("device_profile"):
+        return fp["device_profile"]
+
+    # 3. Check Supabase
+    from db.supabase_client import supabase
     try:
         resp = supabase.table("accounts") \
-            .select("device_profile") \
+            .select("device_profile, fingerprint") \
             .eq("username", username) \
             .single() \
             .execute()
 
-        if resp.data and resp.data.get("device_profile"):
-            return resp.data["device_profile"]
+        if resp.data:
+            if resp.data.get("device_profile"):
+                return resp.data["device_profile"]
+            stored_fp = resp.data.get("fingerprint")
+            if isinstance(stored_fp, dict) and stored_fp.get("device_profile"):
+                return stored_fp["device_profile"]
     except Exception:
         pass
 
-    # Assign new random device profile
+    # 4. Fallback: assign new random profile (legacy accounts without one)
     profile = random.choice(DEVICE_PROFILES)
     try:
-        from db.supabase_client import supabase as sb
-        sb.table("accounts") \
+        supabase.table("accounts") \
             .update({"device_profile": profile}) \
             .eq("username", username) \
             .execute()
-        print(f"  [api] Assigned device: {profile['manufacturer']} {profile['model']}")
+        print(f"  [api] Assigned new device: {profile['manufacturer']} {profile['model']}")
     except Exception as e:
         print(f"  [api] Could not save device profile: {e}")
 
@@ -128,8 +137,8 @@ def create_api_client(account):
     email = account.get("email", "")
     session_file = _get_session_path(username)
 
-    # Get or assign unique device profile for this account
-    device_profile = _assign_device_profile(username)
+    # Get the device profile that matches what was used during account creation
+    device_profile = _assign_device_profile(account)
 
     cl = Client()
     cl.delay_range = [1, 3]
@@ -137,10 +146,9 @@ def create_api_client(account):
     # Apply unique device fingerprint
     _apply_device_profile(cl, device_profile)
 
-    # Set proxy
-    proxy_url = get_fresh_proxy(username)
-    if not proxy_url:
-        proxy_url = account.get("proxy_url")
+    # Set proxy — prefer the account's existing proxy session (same IP as creation)
+    # Only fall back to get_fresh_proxy() for daily use when no proxy_url is provided
+    proxy_url = account.get("proxy_url") or get_fresh_proxy(username)
     if proxy_url:
         cl.set_proxy(proxy_url)
         print(f"  [api] Proxy: {proxy_url[:40]}...")

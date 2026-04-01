@@ -13,7 +13,7 @@ from config import (
     IMAGES_DIR,
 )
 from core.utils import print_section_header
-from core.proxy import assign_proxy, test_proxy
+from core.proxy import force_rotate, test_proxy
 from creator.account import create_account
 
 
@@ -39,10 +39,11 @@ def main():
         print(f"CREATING ACCOUNT {i+1}/{NUM_ACCOUNTS}")
         print(f"{'#'*60}\n")
 
-        # Assign proxy from pool
-        proxy_url = assign_proxy()
+        # Force-rotate to a fresh IP for each new account
+        temp_username = f"new_account_{email_number}"
+        proxy_url = force_rotate(temp_username)
         if proxy_url:
-            print(f"Assigned proxy: {proxy_url[:50]}...")
+            print(f"Fresh proxy: {proxy_url[:50]}...")
             ip = test_proxy(proxy_url)
             if not ip:
                 print("Proxy test failed - proceeding without proxy")
