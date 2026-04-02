@@ -72,8 +72,8 @@ def follow_user(page, target_username):
 
 def check_is_following_us(page, target_username):
     """
-    Check if a target user follows us by visiting their profile.
-    Looks for "Follows you" badge next to their name.
+    Check if a target user follows us using Instagram's web API.
+    Fetches user ID first, then checks friendship status.
 
     Args:
         page: Playwright Page (logged in)
@@ -83,19 +83,38 @@ def check_is_following_us(page, target_username):
         bool: True if they follow us
     """
     try:
-        page.goto(f"https://www.instagram.com/{target_username}/",
-                  wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-        human_delay(2, 3)
+        result = page.evaluate(r"""
+            async (username) => {
+                try {
+                    // Get user ID from web profile API
+                    const userResp = await fetch(
+                        '/api/v1/users/web_profile_info/?username=' + username,
+                        { headers: { 'X-IG-App-ID': '936619743392459' } }
+                    );
+                    if (!userResp.ok) return { error: 'user_lookup_' + userResp.status };
+                    const userData = await userResp.json();
+                    const userId = userData?.data?.user?.id;
+                    if (!userId) return { error: 'no_user_id' };
 
-        # Look for "Follows you" text on the profile
-        follows_you = page.evaluate("""
-            () => {
-                const body = document.body.innerText;
-                return body.includes('Follows you') || body.includes('follows you');
+                    // Check friendship status
+                    const friendResp = await fetch(
+                        '/api/v1/friendships/show/' + userId + '/',
+                        { headers: { 'X-IG-App-ID': '936619743392459' } }
+                    );
+                    if (!friendResp.ok) return { error: 'friendship_' + friendResp.status };
+                    const data = await friendResp.json();
+                    return { followed_by: data.followed_by, following: data.following };
+                } catch(e) {
+                    return { error: e.message };
+                }
             }
-        """)
+        """, target_username)
 
-        return follows_you
+        if result.get("error"):
+            print(f"  [follow] API error checking @{target_username}: {result['error']}")
+            return False
+
+        return result.get("followed_by", False)
 
     except Exception as e:
         print(f"  [follow] Error checking if @{target_username} follows us: {e}")

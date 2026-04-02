@@ -317,7 +317,7 @@ def phase_e_send_followups(page, account_username, model, dm_budget):
     return sent
 
 
-def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
+def run_dm_pipeline(max_accounts=None, dry_run=False, headless=True, **kwargs):
     """
     Main entry point — run the full DM pipeline for all accounts via browser.
     """
@@ -380,7 +380,7 @@ def run_dm_pipeline(max_accounts=None, dry_run=False, **kwargs):
 
         session = None
         try:
-            session = open_session(account, headless=True)
+            session = open_session(account, headless=headless)
 
             if not ensure_logged_in(session):
                 print(f"    Could not log in @{username}, skipping")

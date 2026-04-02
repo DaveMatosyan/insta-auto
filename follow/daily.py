@@ -72,7 +72,7 @@ def follow_targets(page, targets, account_username, count=None):
     return followed
 
 
-def run_daily_follows(max_accounts=None, dry_run=False, **kwargs):
+def run_daily_follows(max_accounts=None, dry_run=False, headless=True, **kwargs):
     """
     Main entry point — run follows for all (or some) accounts via browser.
     Uses ramp-based daily limits.
@@ -153,7 +153,7 @@ def run_daily_follows(max_accounts=None, dry_run=False, **kwargs):
 
         session = None
         try:
-            session = open_session(account, headless=True)
+            session = open_session(account, headless=headless)
 
             if not ensure_logged_in(session):
                 print(f"    Could not log in @{username}, skipping")

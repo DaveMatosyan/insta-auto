@@ -29,7 +29,7 @@ def create_conversation(account_username, target_username, target_score=None):
         resp = supabase.table("conversations").insert(row).execute()
         if resp.data:
             conv_id = resp.data[0]["id"]
-            print(f"  [dm-db] Created conversation #{conv_id}: @{account_username} → @{target_username}")
+            print(f"  [dm-db] Created conversation #{conv_id}: @{account_username} -> @{target_username}")
             return conv_id
         return None
     except Exception as e:

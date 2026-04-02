@@ -30,8 +30,8 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 # --- EMAIL CONFIGURATION ---
 BASE_EMAIL_PREFIX = "redditakk4"  # Will become redditakk4+1100@gmail.com, redditakk4+1101@gmail.com, etc.
 EMAIL_DOMAIN = "@gmail.com"
-START_NUMBER = 1000007  # Starting number for email suffix (7 digits to avoid matching 6-digit verification codes)
-NUM_ACCOUNTS = 1   # Number of accounts to create
+START_NUMBER = 1000001  # Fallback starting number (auto-detected from Supabase in create_accounts.py)
+NUM_ACCOUNTS = 3   # Number of accounts to create
 
 # --- GMAIL CONFIGURATION FOR AUTOMATIC VERIFICATION CODE RETRIEVAL ---
 # Choose between Gmail API (recommended - no CAPTCHA) or IMAP (requires App Password)
@@ -44,8 +44,7 @@ GMAIL_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "gmail_credentials.json")
 # Get App Password from: https://myaccount.google.com/apppasswords
 
 # --- PROXY CONFIGURATION ---
-PROXIES_FILE = os.path.join(PROJECT_ROOT, "proxies.json")
-ACCOUNTS_PER_PROXY = 1
+ACCOUNTS_PER_PROXY = 3  # Max accounts per proxy (proxies stored in Supabase)
 
 # --- SESSION / LOG / DATA DIRS ---
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")

@@ -41,11 +41,9 @@ def send_dm(page, target_username, text):
     Send a direct message to a target user via browser.
 
     Flow:
-      1. Navigate to /direct/new/
-      2. Search for target username in the "To:" field
-      3. Select the user from results
-      4. Click Next / Chat
-      5. Type message and send
+      1. Navigate to target's profile
+      2. Click the "Message" button to open DM thread
+      3. Type message and send
 
     Args:
         page: Playwright Page (logged in)
@@ -56,88 +54,62 @@ def send_dm(page, target_username, text):
         bool: True if sent successfully
     """
     try:
-        # Step 1: Go to new message compose
-        page.goto(DM_NEW_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-        human_delay(2, 4)
+        # Step 1: Go to target's profile
+        page.goto(f"https://www.instagram.com/{target_username}/",
+                  wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+        human_delay(3, 5)
         _dismiss_notifications_popup(page)
 
-        # Step 2: Search for the target user
-        search_input = None
+        # Step 2: Click Message button on profile
+        msg_clicked = False
         for selector in [
-            'input[name="queryBox"]',
-            'input[placeholder="Search..."]',
-            'input[placeholder*="Search"]',
-            'input[aria-label="Search input"]',
+            'div[role="button"]:has-text("Message")',
+            'button:has-text("Message")',
+            'a:has-text("Message")',
         ]:
             try:
-                el = page.locator(selector).first
-                if el.is_visible(timeout=5000):
-                    search_input = el
-                    break
-            except Exception:
-                continue
-
-        if not search_input:
-            print(f"  [dm] Could not find search input on new message page")
-            return False
-
-        search_input.fill(target_username)
-        human_delay(2, 3)
-
-        # Step 3: Select the user from search results
-        user_selected = False
-        # Wait for results to load
-        human_delay(1, 2)
-
-        # Try clicking the exact username match in results
-        for selector in [
-            f'span:has-text("{target_username}")',
-            f'div[role="button"]:has-text("{target_username}")',
-            f'button:has-text("{target_username}")',
-        ]:
-            try:
-                el = page.locator(selector).first
-                if el.is_visible(timeout=5000):
-                    el.click()
-                    human_delay(1, 2)
-                    user_selected = True
-                    break
-            except Exception:
-                continue
-
-        if not user_selected:
-            # Fallback: click first result in the search results list
-            try:
-                first_result = page.locator('div[role="listbox"] div[role="option"], div[role="button"]').first
-                if first_result.is_visible(timeout=5000):
-                    first_result.click()
-                    human_delay(1, 2)
-                    user_selected = True
-            except Exception:
-                pass
-
-        if not user_selected:
-            print(f"  [dm] Could not find @{target_username} in search results")
-            return False
-
-        # Step 4: Click "Chat" or "Next" to open the conversation
-        for btn_text in ["Chat", "Next"]:
-            try:
-                btn = page.locator(f'div[role="button"]:has-text("{btn_text}"), button:has-text("{btn_text}")').first
+                btn = page.locator(selector).first
                 if btn.is_visible(timeout=5000):
                     btn.click()
-                    human_delay(2, 3)
+                    msg_clicked = True
+                    print(f"  [dm] Clicked Message on @{target_username}'s profile")
                     break
             except Exception:
                 continue
 
-        # Step 5: Type and send the message
+        if not msg_clicked:
+            # JS fallback
+            msg_clicked = page.evaluate("""
+                () => {
+                    const els = document.querySelectorAll('div[role="button"], button, a');
+                    for (const el of els) {
+                        if (el.textContent?.trim() === 'Message' && el.offsetParent !== null) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+
+        if not msg_clicked:
+            print(f"  [dm] Could not find Message button on @{target_username}'s profile")
+            return False
+
+        # Wait for DM thread to load
+        human_delay(4, 6)
+        _dismiss_notifications_popup(page)
+
+        # Step 3: Find message input and type
         msg_input = None
         for selector in [
             'textarea[placeholder="Message..."]',
             'textarea[placeholder*="Message"]',
             'div[role="textbox"][contenteditable]',
+            'div[contenteditable="true"][role="textbox"]',
+            'div[contenteditable="true"]',
             'textarea[aria-label*="Message"]',
+            'textarea',
         ]:
             try:
                 el = page.locator(selector).first
@@ -148,7 +120,31 @@ def send_dm(page, target_username, text):
                 continue
 
         if not msg_input:
+            # JS fallback: focus any editable element
+            found = page.evaluate("""
+                () => {
+                    const editables = document.querySelectorAll('[contenteditable="true"], textarea');
+                    for (const el of editables) {
+                        if (el.offsetParent !== null && el.offsetHeight > 10) {
+                            el.focus();
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if found:
+                human_delay(0.5, 1)
+                page.keyboard.type(text, delay=random.randint(20, 50))
+                human_delay(0.5, 1.5)
+                page.keyboard.press("Enter")
+                human_delay(1, 2)
+                print(f"  [dm] Sent to @{target_username}: {text[:60]}{'...' if len(text) > 60 else ''}")
+                return True
+
             print(f"  [dm] Could not find message input field")
+            print(f"  [dm] Current URL: {page.url}")
             return False
 
         msg_input.click()
@@ -184,67 +180,55 @@ def _open_thread(page, target_username):
     """
     Open a DM thread with a specific user.
 
-    Navigates to inbox, finds the thread, and clicks it.
+    Goes to the user's profile and clicks Message button.
     Returns True if thread was opened.
     """
-    _navigate_to_inbox(page)
-
-    # Try to find the thread in the inbox list
-    thread_found = False
-
-    # Search for the username in inbox
     try:
-        # Use the inbox search if available
-        search_input = page.locator('input[placeholder="Search"], input[placeholder*="Search"]').first
-        if search_input.is_visible(timeout=5000):
-            search_input.fill(target_username)
-            human_delay(2, 3)
+        page.goto(f"https://www.instagram.com/{target_username}/",
+                  wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+        human_delay(3, 4)
+        _dismiss_notifications_popup(page)
 
-            # Click the matching thread
-            for selector in [
-                f'span:has-text("{target_username}")',
-                f'div[role="listitem"]:has-text("{target_username}")',
-                f'a:has-text("{target_username}")',
-            ]:
-                try:
-                    el = page.locator(selector).first
-                    if el.is_visible(timeout=5000):
-                        el.click()
-                        human_delay(2, 3)
-                        thread_found = True
-                        break
-                except Exception:
-                    continue
+        # Click Message button
+        for selector in [
+            'div[role="button"]:has-text("Message")',
+            'button:has-text("Message")',
+            'a:has-text("Message")',
+        ]:
+            try:
+                btn = page.locator(selector).first
+                if btn.is_visible(timeout=5000):
+                    btn.click()
+                    human_delay(3, 5)
+                    _dismiss_notifications_popup(page)
+                    return True
+            except Exception:
+                continue
 
-            # Clear search after
-            if thread_found:
-                try:
-                    search_input.fill("")
-                except Exception:
-                    pass
-    except Exception:
-        pass
+        # JS fallback
+        clicked = page.evaluate("""
+            () => {
+                const els = document.querySelectorAll('div[role="button"], button, a');
+                for (const el of els) {
+                    if (el.textContent?.trim() === 'Message' && el.offsetParent !== null) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }
+        """)
+        if clicked:
+            human_delay(3, 5)
+            _dismiss_notifications_popup(page)
+            return True
 
-    if not thread_found:
-        # Fallback: scroll through inbox threads looking for username
-        try:
-            threads = page.locator('div[role="listitem"], a[href*="/direct/t/"]')
-            count = threads.count()
-            for i in range(min(count, 30)):
-                try:
-                    thread_el = threads.nth(i)
-                    thread_text = thread_el.inner_text()
-                    if target_username.lower() in thread_text.lower():
-                        thread_el.click()
-                        human_delay(2, 3)
-                        thread_found = True
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        print(f"  [dm] Could not find Message button for @{target_username}")
+        return False
 
-    return thread_found
+    except Exception as e:
+        print(f"  [dm] Error opening thread with @{target_username}: {e}")
+        return False
 
 
 def read_thread_messages(page, target_username, limit=20):

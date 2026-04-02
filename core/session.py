@@ -17,7 +17,6 @@ from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserCon
 from config import SESSIONS_DIR, BLOCK_IMAGES
 from core.utils import parse_proxy_url
 from core.stealth import get_stealth_script
-from core.proxy import get_fresh_proxy
 
 
 @dataclass
@@ -56,13 +55,11 @@ def open_session(account, headless=True, block_images=None, no_proxy=False):
     username = account.get("username", "unknown")
     cookie_file = _cookie_path(username)
 
-    # Auto-rotating proxy
+    # Static proxy from account's linked proxy (Supabase FK)
     if no_proxy:
         proxy_url = None
     else:
-        proxy_url = get_fresh_proxy(username)
-        if not proxy_url:
-            proxy_url = account.get("proxy_url")
+        proxy_url = account.get("proxy_url")
 
     pw = sync_playwright().start()
 

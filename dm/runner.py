@@ -18,11 +18,14 @@ def main():
                         help="Max accounts to process (default: all)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would happen without sending DMs")
+    parser.add_argument("--headed", action="store_true",
+                        help="Run browser in headed (visible) mode")
     args = parser.parse_args()
 
     result = run_dm_pipeline(
         max_accounts=args.max_accounts,
         dry_run=args.dry_run,
+        headless=not args.headed,
     )
 
     return result

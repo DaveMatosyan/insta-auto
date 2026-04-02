@@ -222,8 +222,11 @@ def upload_post(page, image_path, caption=""):
     """
     Upload a photo post via browser.
 
+    Strategy: Navigate directly to /create/select/ which is the POST creation
+    flow (not story). This avoids the Create dropdown menu entirely.
+
     Flow:
-      1. Click the Create/New post button (+ icon in nav)
+      1. Go to /create/select/ (post creation page)
       2. Upload image via file input
       3. Click Next through crop/filter screens
       4. Add caption
@@ -238,36 +241,41 @@ def upload_post(page, image_path, caption=""):
         bool: True if posted
     """
     try:
-        # Navigate to home first to ensure nav is visible
-        page.goto("https://www.instagram.com/",
+        # Go directly to post creation URL — skips the Create dropdown entirely
+        page.goto("https://www.instagram.com/create/select/",
                   wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-        human_delay(2, 4)
+        human_delay(3, 5)
         _dismiss_modals(page)
 
-        # Step 1: Click Create/New post button
-        create_clicked = False
+        # Check if we got redirected to home (means URL didn't work)
+        current = page.url
+        if "/create" not in current:
+            print(f"  [profile] /create/select/ redirected to {current}, trying Create button...")
+            # Fallback: click Create in sidebar
+            page.goto("https://www.instagram.com/",
+                      wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+            human_delay(2, 3)
+            _dismiss_modals(page)
 
-        # Try the + / Create button in the nav bar
-        for selector in [
-            'a[href="/create/select/"]',
-            'svg[aria-label="New post"]',
-            'a[aria-label="New post"]',
-            'div[role="button"]:has(svg[aria-label="New post"])',
-            'a[href*="create"]',
-        ]:
-            try:
-                el = page.locator(selector).first
-                if el.is_visible(timeout=5000):
-                    el.click()
-                    human_delay(2, 4)
-                    create_clicked = True
-                    break
-            except Exception:
-                continue
+            # Click the Create/New post link in sidebar
+            create_clicked = False
+            for selector in [
+                'a[href="/create/select/"]',
+                'svg[aria-label="New post"]',
+                'a[aria-label="New post"]',
+            ]:
+                try:
+                    el = page.locator(selector).first
+                    if el.is_visible(timeout=5000):
+                        el.click()
+                        human_delay(2, 4)
+                        create_clicked = True
+                        break
+                except Exception:
+                    continue
 
-        if not create_clicked:
-            # Fallback: try nav items with "Create" or "New" text
-            try:
+            if not create_clicked:
+                # JS fallback — click element with "Create" text
                 page.evaluate("""
                     () => {
                         const els = document.querySelectorAll('a, div[role="button"], span');
@@ -284,45 +292,46 @@ def upload_post(page, image_path, caption=""):
                     }
                 """)
                 human_delay(2, 4)
-                create_clicked = True
-            except Exception:
-                pass
 
-        # Step 1b: If a dropdown menu appeared (Post / Story / Reel), click "Post"
-        for post_text in ["Post", "post"]:
+            # If a dropdown appeared, click "Post" specifically
             try:
-                post_option = page.locator(f'a:has-text("{post_text}"), div[role="button"]:has-text("{post_text}"), span:has-text("{post_text}")').first
-                if post_option.is_visible(timeout=3000):
-                    post_option.click()
-                    human_delay(2, 3)
+                # Look for dropdown items — match exact "Post" not "Repost"
+                post_option = page.evaluate("""
+                    () => {
+                        const items = document.querySelectorAll('a, div[role="button"], span, div[role="menuitem"]');
+                        for (const el of items) {
+                            const text = (el.textContent || '').trim();
+                            if (text === 'Post' && el.offsetParent !== null) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                """)
+                if post_option:
                     print("  [profile] Selected 'Post' from create menu")
-                    break
+                    human_delay(2, 3)
             except Exception:
-                continue
+                pass
 
-        # If we ended up in story mode, go back and try the direct post URL
-        if "story" in page.url.lower() or "/creation/" in page.url.lower():
-            print("  [profile] Detected story mode, switching to post creation...")
+        # If we somehow ended up in story creation, abort and retry via direct URL
+        if "/creation/" in page.url or "story" in page.url.lower():
+            print("  [profile] Detected story mode, closing and retrying...")
             try:
-                # Close story editor
-                close_btn = page.locator('button[aria-label="Close"], svg[aria-label="Close"], button:has-text("Discard")').first
-                if close_btn.is_visible(timeout=3000):
-                    close_btn.click()
-                    human_delay(1, 2)
-                # Confirm discard if prompted
-                discard_btn = page.locator('button:has-text("Discard")').first
-                if discard_btn.is_visible(timeout=3000):
-                    discard_btn.click()
+                page.keyboard.press("Escape")
+                human_delay(1, 2)
+                discard = page.locator('button:has-text("Discard")').first
+                if discard.is_visible(timeout=3000):
+                    discard.click()
                     human_delay(1, 2)
             except Exception:
                 pass
-            # Navigate to post creation directly
-            page.goto("https://www.instagram.com/create/select/",
-                      wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
-            human_delay(2, 4)
+            print("  [profile] Could not open post creation (stuck in story mode)")
+            return False
 
-        # Step 2: Upload image
-        # Look for "Select from computer" button or direct file input
+        # Step 2: Upload image via file input
+        # Click "Select from computer" if the dialog shows it
         for sel_text in ["Select from computer", "Select from gallery", "Select"]:
             try:
                 btn = page.locator(f'button:has-text("{sel_text}")').first
@@ -333,44 +342,27 @@ def upload_post(page, image_path, caption=""):
             except Exception:
                 continue
 
-        # Find and use file input
-        file_inputs = page.locator('input[type="file"]')
-        file_count = file_inputs.count()
+        # Find file input — in post creation dialog there should be exactly one
+        file_input = page.locator('input[type="file"][accept*="image"]').first
+        try:
+            file_input.set_input_files(image_path)
+        except Exception:
+            # Fallback: try any file input
+            file_input = page.locator('input[type="file"]').first
+            file_input.set_input_files(image_path)
 
-        if file_count == 0:
-            print(f"  [profile] No file input found for post upload")
+        human_delay(3, 5)
+        print(f"  [profile] Image uploaded: {os.path.basename(image_path)}")
+
+        # Verify we're not in story mode after upload
+        if "/creation/" in page.url or "story" in page.url.lower():
+            print("  [profile] File input triggered story mode, aborting")
             return False
 
-        # Try each file input
-        uploaded = False
-        for idx in range(file_count):
-            try:
-                file_inputs.nth(idx).set_input_files(image_path)
-                human_delay(3, 5)
-
-                # Check if we're in story mode (wrong input) vs post mode
-                if "story" in page.url.lower() or "/creation/" in page.url.lower():
-                    try:
-                        page.locator('button:has-text("Close")').first.click()
-                        human_delay(1, 2)
-                        page.locator('button:has-text("Discard")').first.click()
-                        human_delay(1, 2)
-                    except Exception:
-                        pass
-                    continue
-
-                uploaded = True
-                break
-            except Exception:
-                continue
-
-        if not uploaded:
-            print(f"  [profile] Could not upload image for post")
-            return False
-
-        # Step 3: Click Next through crop and filter screens
-        for step in ["Crop", "Filter"]:
+        # Step 3: Click Next through crop and filter screens (2 times)
+        for step_name in ["Crop", "Filter"]:
             human_delay(1, 2)
+            # Try button click
             next_clicked = False
             for selector in [
                 'button:has-text("Next")',
@@ -381,32 +373,31 @@ def upload_post(page, image_path, caption=""):
                     if btn.is_visible(timeout=5000):
                         btn.click()
                         next_clicked = True
+                        print(f"  [profile] Clicked Next ({step_name})")
                         break
                 except Exception:
                     continue
 
             if not next_clicked:
-                # Try JS click
-                try:
-                    page.evaluate("""
-                        () => {
-                            const els = document.querySelectorAll('button, div[role="button"]');
-                            for (const el of els) {
-                                if (el.textContent?.trim() === 'Next' && el.offsetParent !== null) {
-                                    el.click();
-                                    return true;
-                                }
+                # JS fallback
+                page.evaluate("""
+                    () => {
+                        const els = document.querySelectorAll('button, div[role="button"]');
+                        for (const el of els) {
+                            if (el.textContent?.trim() === 'Next' && el.offsetParent !== null) {
+                                el.click();
+                                return true;
                             }
-                            return false;
                         }
-                    """)
-                except Exception:
-                    pass
+                        return false;
+                    }
+                """)
 
             human_delay(2, 4)
 
         # Step 4: Add caption
         if caption:
+            caption_filled = False
             for selector in [
                 'div[aria-label="Write a caption..."][contenteditable]',
                 'textarea[aria-label="Write a caption..."]',
@@ -423,6 +414,7 @@ def upload_post(page, image_path, caption=""):
                             page.keyboard.type(caption, delay=30)
                         else:
                             el.fill(caption)
+                        caption_filled = True
                         print(f"  [profile] Caption: {caption[:50]}")
                         break
                 except Exception:
@@ -442,11 +434,13 @@ def upload_post(page, image_path, caption=""):
                     btn.click()
                     human_delay(8, 12)
                     shared = True
+                    print(f"  [profile] Clicked Share")
                     break
             except Exception:
                 continue
 
         if not shared:
+            # JS fallback
             try:
                 page.evaluate("""
                     () => {

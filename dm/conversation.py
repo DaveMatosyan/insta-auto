@@ -11,7 +11,8 @@ import random
 import re
 import time
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from config import (
     GEMINI_API_KEY,
@@ -64,8 +65,7 @@ def init_gemini():
     """Initialize Gemini client."""
     if not GEMINI_API_KEY:
         raise ValueError("No Gemini API key! Add GEMINI_API_KEY=your-key to .env")
-    genai.configure(api_key=GEMINI_API_KEY)
-    return genai.GenerativeModel(GEMINI_MODEL)
+    return genai.Client(api_key=GEMINI_API_KEY)
 
 
 def _gaussian_delay(min_sec, max_sec):
@@ -99,11 +99,14 @@ def _validate_message(text):
     # Remove em dashes (massive AI tell)
     text = text.replace("—", ",").replace("--", ",")
 
-    # Remove markdown artifacts
-    text = text.replace("*", "").replace("_", "").strip()
+    # Remove markdown bold/italic but keep * for typo corrections like *you're
+    import re as _re
+    text = _re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** -> bold
+    text = _re.sub(r'(?<!\w)\*(?!\w)', '', text)     # stray * not part of *correction
+    # Don't strip underscores — they appear in usernames and natural text
 
-    # Check length (max 35 words — a little buffer over 30)
-    if len(text.split()) > 35:
+    # Check length — allow up to 120 words total for multi-message replies (with |||)
+    if len(text.split()) > 120:
         return None
 
     # Remove AI prefixes
@@ -114,30 +117,32 @@ def _validate_message(text):
     return text.strip()
 
 
-def _call_gemini(model, prompt, max_retries=3, max_tokens=80, base_temperature=0.85):
+def _call_gemini(client, prompt, max_retries=3, max_tokens=250, base_temperature=0.85):
     """
-    Call Gemini with:
-    - Temperature variation (0.80-0.95 random per call)
-    - Post-generation validation
-    - Retry with higher temp on validation failure
+    Call Gemini with the new google.genai SDK.
+    Uses thinking_budget=0 to prevent thinking tokens eating output.
     """
     for attempt in range(max_retries):
         try:
-            # Vary temperature per call for natural variation
             temp = random.uniform(
                 max(0.80, base_temperature - 0.05),
                 min(0.95, base_temperature + 0.10),
             )
 
-            gen_config = genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
-                temperature=temp,
-                top_p=0.92,
-                top_k=40,
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=temp,
+                    top_p=0.92,
+                    top_k=40,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
             )
-
-            response = model.generate_content(prompt, generation_config=gen_config)
             text = response.text.strip()
+
+            print(f"  [ai-raw] Gemini returned: {text[:200]}")
 
             # Clean markdown wrappers
             if text.startswith('"') and text.endswith('"'):
@@ -149,9 +154,9 @@ def _call_gemini(model, prompt, max_retries=3, max_tokens=80, base_temperature=0
             # Validate
             validated = _validate_message(text.strip())
             if validated:
+                print(f"  [ai-validated] Final: {validated[:200]}")
                 return validated
 
-            # Validation failed — retry with slightly higher temp
             print(f"  [ai] Message failed validation (attempt {attempt+1}), retrying...")
             continue
 
@@ -188,7 +193,11 @@ def generate_opener(model, target_profile):
 
 
 def generate_reply(model, conversation, messages_history, target_profile):
-    """Generate reply using 7-stage state machine."""
+    """
+    Generate reply using 7-stage state machine.
+    Returns (list_of_messages, current_stage) where list_of_messages is 1-3 messages
+    to send in sequence (like a real person who double/triple texts).
+    """
     messages_sent = conversation.get("messages_sent", 0)
 
     # Determine current stage
@@ -208,19 +217,32 @@ def generate_reply(model, conversation, messages_history, target_profile):
         messages_for_prompt = messages_history
 
     prompt = build_reply_prompt(messages_for_prompt, target_profile, messages_sent, current_stage)
-    response = _call_gemini(model, prompt, max_tokens=80, base_temperature=0.85)
+    print(f"\n  [ai-prompt] ===== FULL PROMPT =====")
+    print(prompt)
+    print(f"  [ai-prompt] ===== END PROMPT =====\n")
+    response = _call_gemini(model, prompt, max_tokens=250, base_temperature=0.85)
 
     if not response:
-        fallbacks = [
-            "haha thats cool 😊",
-            "omg really?? tell me more",
-            "thats so fun 😂",
-            "no way lol",
-            "aww 🥰",
-        ]
-        response = random.choice(fallbacks)
+        # Retry once with higher temp and simpler prompt
+        simple_prompt = f"""You are Aiko, a flirty 21yo girl on Instagram DMs.
+The guy just said something to you. Reply in 2-3 sentences, be flirty and playful.
+Ask a question to keep the convo going. All lowercase, casual texting style.
+Their last message: "{messages_for_prompt[-1].get('message_text', 'hey') if messages_for_prompt else 'hey'}"
+Output ONLY your reply:"""
+        response = _call_gemini(model, simple_prompt, max_tokens=120, base_temperature=0.92)
 
-    return response, current_stage
+    if not response:
+        response = "haha ok wait tell me more about that, im lowkey curious now 😏"
+
+    # Parse ||| or || delimiter — Gemini sometimes uses 2 pipes instead of 3
+    if "|||" in response:
+        messages = [m.strip() for m in response.split("|||") if m.strip()]
+    elif "||" in response:
+        messages = [m.strip() for m in response.split("||") if m.strip()]
+    else:
+        messages = [response]
+
+    return messages, current_stage
 
 
 def generate_followup(model, conversation, messages_history, attempt_number):

@@ -26,14 +26,49 @@ PROFILE_IMAGES_DIR = os.path.join(PROJECT_ROOT, "data", "profile_images")
 
 # Bio templates — randomly pick one per account
 BIO_TEMPLATES = [
-    f"{DM_PERSONA_AGE} LA | {DM_PERSONA_STUDIES.lower()} student | link below",
-    f"{DM_PERSONA_LOCATION}\n{DM_PERSONA_STUDIES.lower()} major | {DM_PERSONA_AGE}\nlink in bio",
-    f"{DM_PERSONA_AGE} | LA girl\nstudying {DM_PERSONA_STUDIES.lower()}\nlink in bio",
-    f"{DM_PERSONA_LOCATION}\n{DM_PERSONA_AGE} | content creator",
+    f"{DM_PERSONA_AGE} 🌴 LA\n{DM_PERSONA_STUDIES.lower()} student\nexclusive content below 👇",
+    f"aiko ♡ {DM_PERSONA_AGE}\nLA born and raised\nlink below for the good stuff 😏",
+    f"{DM_PERSONA_AGE} | LA girl\nmodeling + content creator\nmy page 👇🔗",
+    f"✨ {DM_PERSONA_NAME.lower()} ✨\n{DM_PERSONA_AGE} | los angeles\nclick the link babe 👇",
+    f"LA 🌅 | {DM_PERSONA_AGE}\n{DM_PERSONA_STUDIES.lower()} major by day\ncontent creator by night 😈\nlink below",
+    f"aiko 💕 {DM_PERSONA_AGE}\njust a girl from LA\nexclusive stuff on my page 👇",
+    f"{DM_PERSONA_AGE} 🌸 content creator\nLA based\ncheck the link below",
+    f"hey im aiko 🤍\n{DM_PERSONA_AGE} | LA\nmy exclusive page is linked below",
 ]
 
-# Post captions
-POST_CAPTIONS = ["", "", "", "feeling cute", "good vibes only", "", "hiiii", "", ""]
+# Post captions — randomly picked per post. Mix of empty (no caption) and short casual ones.
+POST_CAPTIONS = [
+    "",
+    "",
+    "feeling cute",
+    "good vibes only ✨",
+    "hiiii",
+    "golden hour 🌅",
+    "cant stop wont stop",
+    "just vibin",
+    "mood",
+    "its giving main character",
+    "sundays are for selfies",
+    "excuse me while i kiss the sky",
+    "im that girl 💅",
+    "catch me outside",
+    "no caption needed",
+    "just a lil something",
+    "hey its me",
+    "✨",
+    "🤍",
+    "la life",
+    "gym then brunch",
+    "new post who dis",
+    "felt cute might delete later",
+    "weekend mode on",
+    "hiii dont mind me",
+    "late night thoughts",
+    "keep it cute",
+    "living my best life",
+    "another day another selfie",
+    "soft girl era",
+]
 
 
 def get_profile_images():
@@ -48,7 +83,7 @@ def get_profile_images():
     return images
 
 
-def setup_account_profile(account, linktree_url=None, num_posts=6, **kwargs):
+def setup_account_profile(account, linktree_url=FANVUE_LINK, num_posts=6, **kwargs):
     """
     Full profile setup for one account via browser.
     """

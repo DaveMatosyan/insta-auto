@@ -17,7 +17,11 @@ def _row_to_account(row):
     fp = row.get("fingerprint")
     if fp:
         acc["fingerprint"] = fp if isinstance(fp, dict) else json.loads(fp)
-    if row.get("proxy_url"):
+    # Get proxy_url from joined proxies table (FK), fall back to old column
+    proxies_data = row.get("proxies")
+    if proxies_data and isinstance(proxies_data, dict) and proxies_data.get("proxy_url"):
+        acc["proxy_url"] = proxies_data["proxy_url"]
+    elif row.get("proxy_url"):
         acc["proxy_url"] = row["proxy_url"]
     return acc
 
@@ -25,7 +29,7 @@ def _row_to_account(row):
 def load_accounts():
     """Load all accounts from Supabase."""
     try:
-        resp = supabase.table("accounts").select("*").execute()
+        resp = supabase.table("accounts").select("*, proxies(proxy_url)").execute()
         return [_row_to_account(r) for r in resp.data]
     except Exception as e:
         print(f"Error loading accounts from Supabase: {e}")
@@ -33,7 +37,7 @@ def load_accounts():
 
 
 def save_account(email, username, password, fingerprint=None, proxy_url=None, role="follow"):
-    """Save a new account to Supabase."""
+    """Save a new account to Supabase and auto-assign a proxy."""
     row = {
         "email": email,
         "username": username,
@@ -51,6 +55,10 @@ def save_account(email, username, password, fingerprint=None, proxy_url=None, ro
     try:
         supabase.table("accounts").insert(row).execute()
         print(f"Saved account @{username} to Supabase")
+
+        # Auto-assign proxy via FK
+        from core.proxy import assign_proxy_to_account
+        assign_proxy_to_account(username)
     except Exception as e:
         print(f"Error saving account @{username}: {e}")
 
@@ -72,7 +80,7 @@ def update_account(username, **fields):
 def get_all_accounts(role=None):
     """Return accounts, optionally filtered by role."""
     try:
-        query = supabase.table("accounts").select("*")
+        query = supabase.table("accounts").select("*, proxies(proxy_url)")
         if role:
             query = query.eq("role", role)
         resp = query.execute()
@@ -89,7 +97,7 @@ def get_all_accounts(role=None):
 def get_account_by_username(username):
     """Get account data by username."""
     try:
-        resp = supabase.table("accounts").select("*").eq("username", username).limit(1).execute()
+        resp = supabase.table("accounts").select("*, proxies(proxy_url)").eq("username", username).limit(1).execute()
         if resp.data:
             return _row_to_account(resp.data[0])
     except Exception as e:
