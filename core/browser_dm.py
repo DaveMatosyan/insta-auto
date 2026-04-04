@@ -96,8 +96,20 @@ def send_dm(page, target_username, text):
             print(f"  [dm] Could not find Message button on @{target_username}'s profile")
             return False
 
-        # Wait for DM thread to load
-        human_delay(4, 6)
+        # Wait for DM thread to load — either URL changes to /direct/ or input appears
+        human_delay(2, 3)
+        for _ in range(10):
+            if "/direct/" in page.url:
+                break
+            # Check if a textbox appeared (overlay mode)
+            try:
+                tb = page.locator('div[role="textbox"][contenteditable], textarea[placeholder*="Message"]').first
+                if tb.is_visible(timeout=1000):
+                    break
+            except Exception:
+                pass
+            human_delay(1, 1.5)
+        human_delay(1, 2)
         _dismiss_notifications_popup(page)
 
         # Step 3: Find message input and type

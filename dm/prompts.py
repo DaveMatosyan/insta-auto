@@ -108,6 +108,8 @@ def _target_info(target_profile):
         parts.append(f"their bio: {bio[:150]}")
     if comment:
         parts.append(f"they commented on a models post: {comment[:150]}")
+    if not bio and not comment:
+        parts.append("no profile info available. DONT make up details about them. just say hey and ask a simple question like where are you from or whats up.")
     return "\n".join(parts)
 
 

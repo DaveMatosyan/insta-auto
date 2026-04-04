@@ -60,36 +60,51 @@ def _go_to_inbox(page):
 def _detect_unread_threads(page):
     return page.evaluate(r"""
         () => {
-            const threads = [];
-            const buttons = document.querySelectorAll('div[role="button"]');
-            let idx = 0;
-            for (const btn of buttons) {
-                const pic = btn.querySelector('img[alt="user-profile-picture"], img[draggable="false"]');
-                if (!pic) continue;
-                const allDivs = btn.querySelectorAll('div');
-                let isUnread = false;
-                for (const d of allDivs) {
-                    const style = window.getComputedStyle(d);
-                    if (d.offsetWidth >= 6 && d.offsetWidth <= 12
-                        && d.offsetHeight >= 6 && d.offsetHeight <= 12
-                        && style.borderRadius
-                        && style.backgroundColor
-                        && style.backgroundColor !== 'rgba(0, 0, 0, 0)') {
-                        const hidden = d.querySelector('div[style*="display: none"], div[style*="visibility: hidden"]');
-                        if (hidden && hidden.textContent?.includes('Unread')) {
-                            isUnread = true;
+            const unread = [];
+            const allButtons = document.querySelectorAll('button, div[role="button"]');
+            let threadIndex = 0;
+
+            for (const btn of allButtons) {
+                const pics = btn.querySelectorAll('img[alt="user-profile-picture"]');
+                if (pics.length === 0) continue;
+
+                let hasUnread = false;
+                const allEls = btn.querySelectorAll('*');
+                for (const el of allEls) {
+                    const text = el.textContent?.trim();
+                    if (text === 'Unread' && el.childNodes.length <= 2) {
+                        hasUnread = true;
+                        break;
+                    }
+                    if (text && text.match(/^\d+ new message/)) {
+                        hasUnread = true;
+                        break;
+                    }
+                }
+
+                if (hasUnread) {
+                    let displayName = '';
+                    const candidates = btn.querySelectorAll('span, div');
+                    for (const c of candidates) {
+                        const t = c.textContent?.trim();
+                        if (t && t.length > 0 && t.length < 30
+                            && t !== 'Unread' && t !== '·'
+                            && !t.startsWith('You:')
+                            && !t.match(/^\d+ new message/)
+                            && !t.match(/^\d+[mhd]$/)
+                            && !t.match(/^\d+ (minutes?|hours?|days?) ago/)
+                            && c.offsetWidth > 0
+                            && c.children.length === 0) {
+                            displayName = t;
                             break;
                         }
                     }
+                    unread.push({ display_name: displayName, index: threadIndex });
                 }
-                if (isUnread) {
-                    const nameEl = btn.querySelector('span[dir="auto"]');
-                    const name = nameEl ? nameEl.textContent.trim() : 'Unknown';
-                    threads.push({ display_name: name, index: idx });
-                }
-                idx++;
+                threadIndex++;
             }
-            return threads;
+
+            return unread;
         }
     """)
 
@@ -97,11 +112,11 @@ def _detect_unread_threads(page):
 def _click_thread_by_index(page, thread_index):
     clicked = page.evaluate(r"""
         (idx) => {
-            const buttons = document.querySelectorAll('div[role="button"]');
+            const allButtons = document.querySelectorAll('button, div[role="button"]');
             let count = 0;
-            for (const btn of buttons) {
-                const pic = btn.querySelector('img[alt="user-profile-picture"], img[draggable="false"]');
-                if (!pic) continue;
+            for (const btn of allButtons) {
+                const pics = btn.querySelectorAll('img[alt="user-profile-picture"], img[draggable="false"]');
+                if (pics.length === 0) continue;
                 if (count === idx) { btn.click(); return true; }
                 count++;
             }
@@ -116,15 +131,82 @@ def _click_thread_by_index(page, thread_index):
 def _extract_username_from_thread(page):
     return page.evaluate(r"""
         () => {
-            const links = document.querySelectorAll('a[aria-label]');
+            const links = document.querySelectorAll('a[href]');
             for (const a of links) {
                 const label = a.getAttribute('aria-label') || '';
-                const m = label.match(/Open the profile page of (.+)/);
-                if (m) return m[1];
+                if (label.startsWith('Open the profile page of ')) {
+                    return label.replace('Open the profile page of ', '').trim();
+                }
             }
+
+            const navPaths = new Set(['direct', 'explore', 'reels', 'accounts', 'p', 'stories',
+                'notifications', 'settings', 'create', 'about', 'legal', 'safety']);
+            for (const a of links) {
+                const href = a.getAttribute('href') || '';
+                const match = href.match(/^\/([a-zA-Z0-9._]+)\/$/);
+                if (match && !navPaths.has(match[1])) {
+                    const rect = a.getBoundingClientRect();
+                    if (rect.top < 200 && rect.top > 0) {
+                        return match[1];
+                    }
+                }
+            }
+
+            for (const a of links) {
+                const href = a.getAttribute('href') || '';
+                const match = href.match(/^\/([a-zA-Z0-9._]+)\/$/);
+                if (match && !navPaths.has(match[1])) {
+                    return match[1];
+                }
+            }
+
+            const headerEls = document.querySelectorAll('h2, h1, heading, [role="heading"]');
+            for (const h of headerEls) {
+                const t = h.textContent?.trim();
+                if (t && t.match(/^[a-zA-Z0-9._]+$/) && t.length > 2 && t.length < 30) {
+                    if (!navPaths.has(t)) return t;
+                }
+            }
+
             return null;
         }
     """)
+
+
+def _resolve_username_from_display_name(display_name, bot_username):
+    """Look up username from display name via Supabase."""
+    try:
+        from db.supabase_client import supabase
+        result = supabase.table("conversations").select(
+            "target_username"
+        ).eq("account_username", bot_username).execute()
+
+        if not result.data:
+            return None
+
+        for conv in result.data:
+            target = conv.get("target_username", "")
+            if display_name.lower().replace(" ", "") in target.lower().replace(".", "").replace("_", ""):
+                return target
+            if target.lower().replace(".", "").replace("_", "") in display_name.lower().replace(" ", ""):
+                return target
+
+        for conv in result.data:
+            target = conv.get("target_username", "")
+            try:
+                profile = supabase.table("target_profiles").select(
+                    "full_name"
+                ).eq("username", target).single().execute()
+                if profile.data:
+                    full_name = (profile.data.get("full_name") or "").strip()
+                    if full_name.lower() == display_name.lower():
+                        return target
+            except Exception:
+                continue
+
+        return None
+    except Exception:
+        return None
 
 
 def _read_all_new_messages_from_them(page):
@@ -361,9 +443,13 @@ def phase_inbox(page, username, model, watch_seconds=600):
 
                     target = _extract_username_from_thread(page)
                     if not target:
-                        print(f"  [{now}] Could not get username ({display_name})")
+                        print(f"  [{now}] DOM extraction failed for '{display_name}', trying DB lookup...")
+                        target = _resolve_username_from_display_name(display_name, username)
+                    if not target:
+                        print(f"  [{now}] Could not resolve username for '{display_name}'")
                         _go_back_to_inbox(page)
                         continue
+                    print(f"  [{now}] Resolved: '{display_name}' → @{target}")
 
                     # Auto-create conversation if new
                     conv = check_existing_conversation(username, target)

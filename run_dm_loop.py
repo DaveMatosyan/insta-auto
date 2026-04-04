@@ -44,9 +44,9 @@ def _go_to_inbox(page):
 def _detect_unread_threads(page):
     """
     Detect threads with unread messages in the inbox.
-    On mobile, Instagram puts a hidden <div>Unread</div> inside unread thread buttons.
-    Display names are shown (not usernames), so we return the index of the unread
-    thread button to click it later and extract the username from inside the chat.
+    Works on both mobile and desktop Instagram DOM:
+      - Mobile: div[role="button"] with hidden <div>Unread</div> (offsetWidth < 2)
+      - Desktop: button elements with visible "Unread" text or "N new messages"
 
     Returns list of dicts: [{"display_name": str, "index": int}]
     """
@@ -54,36 +54,46 @@ def _detect_unread_threads(page):
         () => {
             const unread = [];
 
-            // Each thread is a div[role="button"] containing an img[alt="user-profile-picture"]
-            const allButtons = document.querySelectorAll('div[role="button"]');
+            // Find all thread items — can be button or div[role="button"]
+            const allButtons = document.querySelectorAll('button, div[role="button"]');
             let threadIndex = 0;
 
             for (const btn of allButtons) {
-                // Only consider buttons that look like thread items (have profile pic)
+                // Only consider elements that have a profile pic (thread items)
                 const pics = btn.querySelectorAll('img[alt="user-profile-picture"]');
                 if (pics.length === 0) continue;
 
-                // Check for hidden "Unread" marker
-                const divs = btn.querySelectorAll('div');
+                // Check for "Unread" marker — multiple detection methods
                 let hasUnread = false;
-                for (const d of divs) {
-                    if (d.childNodes.length === 1
-                        && d.childNodes[0].nodeType === 3
-                        && d.textContent.trim() === 'Unread'
-                        && d.offsetWidth < 2) {
+                const allEls = btn.querySelectorAll('*');
+                for (const el of allEls) {
+                    const text = el.textContent?.trim();
+                    // Method 1: hidden div with "Unread" text (mobile)
+                    if (text === 'Unread' && el.childNodes.length <= 2) {
+                        hasUnread = true;
+                        break;
+                    }
+                    // Method 2: "N new messages" text (desktop)
+                    if (text && text.match(/^\d+ new message/)) {
                         hasUnread = true;
                         break;
                     }
                 }
 
                 if (hasUnread) {
-                    // Get the display name from the first visible span
-                    const spans = btn.querySelectorAll('span');
+                    // Get display name — first meaningful text in the thread
                     let displayName = '';
-                    for (const s of spans) {
-                        const t = s.textContent?.trim();
-                        if (t && t.length > 0 && t !== 'Unread' && t !== '·'
-                            && !t.startsWith('You:') && s.offsetWidth > 0) {
+                    const candidates = btn.querySelectorAll('span, div');
+                    for (const c of candidates) {
+                        const t = c.textContent?.trim();
+                        if (t && t.length > 0 && t.length < 30
+                            && t !== 'Unread' && t !== '·'
+                            && !t.startsWith('You:')
+                            && !t.match(/^\d+ new message/)
+                            && !t.match(/^\d+[mhd]$/)
+                            && !t.match(/^\d+ (minutes?|hours?|days?) ago/)
+                            && c.offsetWidth > 0
+                            && c.children.length === 0) {
                             displayName = t;
                             break;
                         }
@@ -102,10 +112,10 @@ def _click_thread_by_index(page, thread_index):
     """Click on a thread in the inbox by its index. Returns True if clicked."""
     clicked = page.evaluate("""
         (idx) => {
-            const allButtons = document.querySelectorAll('div[role="button"]');
+            const allButtons = document.querySelectorAll('button, div[role="button"]');
             let threadIndex = 0;
             for (const btn of allButtons) {
-                const pics = btn.querySelectorAll('img[alt="user-profile-picture"]');
+                const pics = btn.querySelectorAll('img[alt="user-profile-picture"], img[draggable="false"]');
                 if (pics.length === 0) continue;
                 if (threadIndex === idx) {
                     btn.click();
@@ -124,8 +134,7 @@ def _click_thread_by_index(page, thread_index):
 def _extract_username_from_thread(page):
     """
     Extract the actual username from an open DM thread.
-    On mobile, the chat header has a link like:
-      <a href="/username/" aria-label="Open the profile page of username">
+    Works on both mobile and desktop DOM.
     Returns username string or None.
     """
     return page.evaluate(r"""
@@ -140,88 +149,175 @@ def _extract_username_from_thread(page):
             }
 
             // Method 2: extract from href pattern /<username>/
-            // Look for profile links in the chat header area
+            // Look for profile links in the chat header area (skip nav links)
+            const navPaths = new Set(['direct', 'explore', 'reels', 'accounts', 'p', 'stories',
+                'notifications', 'settings', 'create', 'about', 'legal', 'safety']);
             for (const a of links) {
                 const href = a.getAttribute('href') || '';
                 const match = href.match(/^\/([a-zA-Z0-9._]+)\/$/);
-                if (match && !['direct', 'explore', 'reels', 'accounts'].includes(match[1])) {
+                if (match && !navPaths.has(match[1])) {
+                    const rect = a.getBoundingClientRect();
+                    if (rect.top < 200 && rect.top > 0) {
+                        return match[1];
+                    }
+                }
+            }
+
+            // Method 3: fallback — any profile link not in nav
+            for (const a of links) {
+                const href = a.getAttribute('href') || '';
+                const match = href.match(/^\/([a-zA-Z0-9._]+)\/$/);
+                if (match && !navPaths.has(match[1])) {
                     return match[1];
                 }
             }
 
-            // Method 3: URL contains thread ID, check for username in page content
-            const headings = document.querySelectorAll('heading, h1, h2');
-            // Not reliable on mobile — display name only
+            // Method 4: thread header — look for username-like text in the header area
+            // On mobile, the header shows the display name; look for smaller text that looks like a username
+            const headerEls = document.querySelectorAll('h2, h1, heading, [role="heading"]');
+            for (const h of headerEls) {
+                const t = h.textContent?.trim();
+                if (t && t.match(/^[a-zA-Z0-9._]+$/) && t.length > 2 && t.length < 30) {
+                    if (!navPaths.has(t)) return t;
+                }
+            }
 
             return null;
         }
     """)
 
 
+def _resolve_username_from_display_name(display_name, bot_username):
+    """
+    Look up an Instagram username from a display name using Supabase conversations.
+    This is a fallback when DOM parsing can't find the username directly.
+    Returns username string or None.
+    """
+    try:
+        from db.supabase_client import supabase
+        # Search conversations for this bot account — match target display name
+        result = supabase.table("conversations").select(
+            "target_username"
+        ).eq("account_username", bot_username).execute()
+
+        if not result.data:
+            return None
+
+        # Try to match by checking profiles for display name
+        for conv in result.data:
+            target = conv.get("target_username", "")
+            # Quick heuristic: if display name is contained in username or vice versa
+            if display_name.lower().replace(" ", "") in target.lower().replace(".", "").replace("_", ""):
+                return target
+            if target.lower().replace(".", "").replace("_", "") in display_name.lower().replace(" ", ""):
+                return target
+
+        # Broader search: check target_profiles table
+        for conv in result.data:
+            target = conv.get("target_username", "")
+            try:
+                profile = supabase.table("target_profiles").select(
+                    "full_name"
+                ).eq("username", target).single().execute()
+                if profile.data:
+                    full_name = (profile.data.get("full_name") or "").strip()
+                    if full_name.lower() == display_name.lower():
+                        return target
+            except Exception:
+                continue
+
+        return None
+    except Exception:
+        return None
+
+
 def _read_all_new_messages_from_them(page):
     """
     Read ALL messages from the other person in the currently open thread.
-    On mobile Instagram:
-      - Their messages are inside div[role="group"] with a profile pic link
-      - Our messages do NOT have div[role="group"]
-      - Text is in span[dir="auto"] inside div[role="presentation"]
+    Works on both mobile and desktop Instagram DOM.
     Returns list of strings (all their messages in order), or empty list.
     """
     return page.evaluate(r"""
         () => {
             const result = [];
+            const skipTexts = new Set(['Seen', 'Delivered', 'Sent', 'Photo', 'Video',
+                'Active now', 'Active today', 'Like', 'Liked a message', 'Translate',
+                'Translated from', 'Audio', 'Voice message']);
 
-            // Find ALL div[role="group"] — each one is a message from them
+            // Method 1: div[role="group"] with profile pic (mobile pattern)
             const groups = document.querySelectorAll('div[role="group"]');
+            if (groups.length > 0) {
+                for (const g of groups) {
+                    const hasPic = g.querySelector('a[href] img[alt="user-profile-picture"]');
+                    if (!hasPic) continue;
 
-            for (const g of groups) {
-                // Verify it has a profile pic (confirms it's from them)
-                const hasPic = g.querySelector('a[href] img[alt="user-profile-picture"]');
-                if (!hasPic) continue;
-
-                // Extract ALL text messages from this group
-                // (consecutive messages from same person can be in one group)
-                const textEls = g.querySelectorAll('span[dir="auto"], div[dir="auto"]');
-                const textsFound = [];
-                for (const el of textEls) {
-                    const t = el.textContent?.trim();
-                    if (t && t.length > 0
-                        && !t.match(/^\d{1,2}:\d{2}/)
-                        && t !== 'Seen' && t !== 'Delivered'
-                        && t !== 'Photo' && t !== 'Video'
-                        && !textsFound.includes(t)) {
-                        // Skip if this is a child of an element we already captured
-                        let isDuplicate = false;
-                        for (const prev of textsFound) {
-                            if (prev.includes(t) || t.includes(prev)) {
-                                isDuplicate = true;
-                                break;
+                    const textEls = g.querySelectorAll('span[dir="auto"], div[dir="auto"]');
+                    const textsFound = [];
+                    for (const el of textEls) {
+                        const t = el.textContent?.trim();
+                        if (t && t.length > 0 && t.length < 2000
+                            && !t.match(/^\d{1,2}:\d{2}/)
+                            && !skipTexts.has(t)) {
+                            let isDuplicate = false;
+                            for (const prev of textsFound) {
+                                if (prev.includes(t) || t.includes(prev)) {
+                                    isDuplicate = true;
+                                    break;
+                                }
                             }
+                            if (!isDuplicate) textsFound.push(t);
                         }
-                        if (!isDuplicate) {
-                            textsFound.push(t);
+                    }
+                    for (const t of textsFound) result.push(t);
+                }
+                if (result.length > 0) return result;
+            }
+
+            // Method 2: Desktop pattern — div[role="row"] contains message rows
+            // Each row has message bubbles; "their" messages are on the left side
+            const rows = document.querySelectorAll('div[role="row"]');
+            if (rows.length > 0) {
+                for (const row of rows) {
+                    // Their messages have a profile pic or are left-aligned
+                    const hasPic = row.querySelector('img[alt="user-profile-picture"]');
+                    const spans = row.querySelectorAll('span[dir="auto"], div[dir="auto"]');
+
+                    // If row has profile pic, it's from them
+                    if (hasPic) {
+                        for (const el of spans) {
+                            const t = el.textContent?.trim();
+                            if (t && t.length > 0 && t.length < 2000
+                                && !t.match(/^\d{1,2}:\d{2}/)
+                                && !skipTexts.has(t)
+                                && el.children.length === 0) {
+                                if (!result.includes(t)) result.push(t);
+                            }
                         }
                     }
                 }
+                if (result.length > 0) return result;
+            }
 
-                if (textsFound.length > 0) {
-                    for (const t of textsFound) {
-                        result.push(t);
+            // Method 3: Fallback — find the chat container and look for message bubbles
+            // On desktop, their messages are typically positioned on the left
+            const chatContainer = document.querySelector('div[role="grid"]')
+                || document.querySelector('section main div[style*="flex"]');
+            if (chatContainer) {
+                const allSpans = chatContainer.querySelectorAll('span[dir="auto"]');
+                const viewW = window.innerWidth;
+
+                for (const el of allSpans) {
+                    const t = el.textContent?.trim();
+                    if (!t || t.length === 0 || t.length > 2000) continue;
+                    if (skipTexts.has(t)) continue;
+                    if (t.match(/^\d{1,2}:\d{2}/)) continue;
+                    if (el.children.length > 0) continue;
+
+                    // Check position — their messages are on the left half
+                    const rect = el.getBoundingClientRect();
+                    if (rect.left < viewW * 0.4 && rect.top > 80) {
+                        if (!result.includes(t)) result.push(t);
                     }
-                } else {
-                    // Check for media if no text found
-                    let mediaText = '';
-                    const imgs = g.querySelectorAll('img');
-                    for (const img of imgs) {
-                        const alt = img.getAttribute('alt') || '';
-                        if (alt !== 'user-profile-picture' && img.width > 50) {
-                            mediaText = '[photo]';
-                            break;
-                        }
-                    }
-                    if (!mediaText && g.querySelector('video')) mediaText = '[video]';
-                    if (!mediaText) mediaText = '[media]';
-                    result.push(mediaText);
                 }
             }
 
@@ -231,24 +327,26 @@ def _read_all_new_messages_from_them(page):
 
 
 def _go_back_to_inbox(page):
-    """Go back to inbox from a thread using the back button (no page reload)."""
-    # The back button is: svg[aria-label="Back"] inside a span, inside a div,
-    # inside a div[role="button"]. Click the role="button" ancestor.
+    """Go back to inbox from a thread. On desktop, inbox list is always visible (no back needed)."""
+    # On desktop, the inbox list is a side panel — we just need to be on /direct/inbox/
+    if "/direct/inbox" in page.url:
+        # Already in inbox view (desktop shows both list + thread)
+        return
+
+    # Try back button (mobile)
     clicked = page.evaluate("""
         () => {
             const svg = document.querySelector('svg[aria-label="Back"]');
             if (svg) {
-                // Walk up to find the clickable div[role="button"]
                 let el = svg;
                 for (let i = 0; i < 5; i++) {
                     el = el.parentElement;
                     if (!el) break;
-                    if (el.getAttribute('role') === 'button') {
+                    if (el.getAttribute('role') === 'button' || el.tagName === 'BUTTON') {
                         el.click();
                         return true;
                     }
                 }
-                // Fallback: click the svg's parent
                 svg.parentElement.click();
                 return true;
             }
@@ -369,9 +467,14 @@ def run_loop(max_accounts=1, interval=15, headless=False):
                     # Extract the actual username from the chat header
                     target = _extract_username_from_thread(page)
                     if not target:
-                        print(f"  [{now}] Could not extract username from thread ({display_name})")
+                        # Fallback: resolve username from display name via Supabase
+                        print(f"  [{now}] DOM extraction failed for '{display_name}', trying DB lookup...")
+                        target = _resolve_username_from_display_name(display_name, username)
+                    if not target:
+                        print(f"  [{now}] Could not resolve username for '{display_name}'")
                         _go_back_to_inbox(page)
                         continue
+                    print(f"  [{now}] Resolved: '{display_name}' → @{target}")
 
                     # Check if we have a conversation with this person — auto-create if not
                     conv = check_existing_conversation(username, target)
